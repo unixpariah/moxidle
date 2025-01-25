@@ -4,6 +4,16 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+calloop = "0.14.2"
+calloop-wayland-source = "0.4.0"
 env_logger = "0.11.6"
+log = "0.4.25"
+nix = { version = "0.29.0", features = [ "signal" ] }
 wayland-client = "0.31.7"
 wayland-protocols = { version = "0.32.5", features = [ "staging", "client" ] }
+wayland-server = "0.31.6"
+zbus = "5.3.1"
+
+[features]
+systemd = []
+elogind = []

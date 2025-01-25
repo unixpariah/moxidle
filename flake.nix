@@ -29,7 +29,7 @@
             buildInputs = [
               cargo
               rustc
-              rust-analyzer-unwrapped
+              rust-analyzer
               rustfmt
               clippy
               nixd
