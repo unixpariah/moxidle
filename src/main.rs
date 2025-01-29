@@ -1,5 +1,8 @@
-//mod screensaver;
 mod config;
+#[cfg(feature = "dbus")]
+mod screensaver;
+#[cfg(feature = "dbus")]
+use calloop::channel;
 
 use calloop::EventLoop;
 use calloop_wayland_source::WaylandSource;
@@ -49,6 +52,8 @@ struct Moxidle {
     notifier: ext_idle_notifier_v1::ExtIdleNotifierV1,
     timeout_cmds: Vec<TimeoutCmd>,
     config: MoxidleConfig,
+    inhibited: bool,
+    qh: QueueHandle<Self>,
 }
 
 impl Moxidle {
@@ -75,7 +80,38 @@ impl Moxidle {
             config,
             notifier,
             seat,
+            inhibited: false,
+            qh,
         })
+    }
+
+    fn handle_event(&mut self, event: Event) {
+        match event {
+            #[cfg(feature = "dbus")]
+            Event::ScreensaverInhibit(inhibited) => {
+                self.inhibited = inhibited;
+
+                if !inhibited {
+                    self.reset_idle_timers();
+                }
+            }
+        }
+    }
+
+    fn reset_idle_timers(&mut self) {
+        self.timeout_cmds.iter_mut().for_each(|cmd| {
+            cmd.notification =
+                self.notifier
+                    .get_idle_notification(cmd.timeout(), &self.seat, &self.qh, ());
+        });
+    }
+}
+
+impl Deref for Moxidle {
+    type Target = MoxidleConfig;
+
+    fn deref(&self) -> &Self::Target {
+        &self.config
     }
 }
 
@@ -122,6 +158,11 @@ impl Dispatch<ext_idle_notification_v1::ExtIdleNotificationV1, ()> for Moxidle {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
+        if state.inhibited {
+            log::debug!("Ignoring idle event due to active inhibition");
+            return;
+        }
+
         let Some(timeout_cmd) = state
             .timeout_cmds
             .iter()
@@ -133,11 +174,13 @@ impl Dispatch<ext_idle_notification_v1::ExtIdleNotificationV1, ()> for Moxidle {
         match event {
             ext_idle_notification_v1::Event::Idled => {
                 if let Some(on_timeout) = timeout_cmd.on_timeout.as_ref() {
+                    log::info!("Executing timeout command: {}", on_timeout);
                     run_command(Arc::clone(on_timeout));
                 }
             }
             ext_idle_notification_v1::Event::Resumed => {
                 if let Some(on_resume) = timeout_cmd.on_resume.as_ref() {
+                    log::info!("Executing resume command: {}", on_resume);
                     run_command(Arc::clone(on_resume));
                 }
             }
@@ -161,6 +204,12 @@ impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for Moxidle {
 delegate_noop!(Moxidle: ext_idle_notifier_v1::ExtIdleNotifierV1);
 delegate_noop!(Moxidle: ignore wl_seat::WlSeat);
 
+#[derive(Debug)]
+enum Event {
+    #[cfg(feature = "dbus")]
+    ScreensaverInhibit(bool),
+}
+
 fn main() -> Result<(), Box<dyn error::Error>> {
     env_logger::init();
 
@@ -174,6 +223,35 @@ fn main() -> Result<(), Box<dyn error::Error>> {
     WaylandSource::new(conn, event_queue)
         .insert(event_loop.handle())
         .unwrap();
+
+    #[cfg(feature = "dbus")]
+    {
+        let (executor, scheduler) = calloop::futures::executor().unwrap();
+        let (sender, receiver) = channel::channel();
+
+        if !moxidle.ignore_dbus_inhibit {
+            scheduler
+                .schedule(async move {
+                    if let Err(err) = screensaver::serve(sender).await {
+                        log::error!("failed to serve FreeDesktop screensaver interface: {}", err);
+                    }
+                })
+                .unwrap();
+        }
+
+        event_loop
+            .handle()
+            .insert_source(executor, |_, _, _| {})
+            .unwrap();
+        event_loop
+            .handle()
+            .insert_source(receiver, |event, _, state| {
+                if let channel::Event::Msg(event) = event {
+                    state.handle_event(event);
+                }
+            })
+            .unwrap();
+    }
 
     event_loop
         .run(None, &mut moxidle, |_| {})

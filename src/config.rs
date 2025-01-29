@@ -39,9 +39,10 @@ pub struct MoxidleConfig {
     pub unlock_cmd: Option<Arc<str>>,
     pub before_sleep_cmd: Option<Arc<str>>,
     pub after_sleep_cmd: Option<Arc<str>>,
-    pub ignore_dbus_inhibit: bool,
     pub ignore_systemd_inhibit: bool,
     pub ignore_audio_inhibit: bool,
+    #[cfg(feature = "dbus")]
+    pub ignore_dbus_inhibit: bool,
 }
 
 #[derive(Deserialize)]
