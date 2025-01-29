@@ -33,6 +33,8 @@
               rustfmt
               clippy
               nixd
+              pkg-config
+              lua5_4
             ];
           };
 
