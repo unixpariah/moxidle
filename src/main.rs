@@ -1,18 +1,14 @@
 mod config;
 mod screensaver;
 
-use calloop::channel;
-use calloop::EventLoop;
+use calloop::{channel, generic::Generic, EventLoop, Interest, Mode};
 use calloop_wayland_source::WaylandSource;
 use config::{FullConfig, MoxidleConfig, TimeoutConfig};
-use inotify::Inotify;
-use inotify::WatchMask;
-use std::os::fd::AsRawFd;
-use std::path::PathBuf;
-use std::{error, ops::Deref, process::Command, sync::Arc};
+use inotify::{Inotify, WatchMask};
+use std::{error::Error, os::fd::AsRawFd, process::Command, sync::Arc};
 use wayland_client::{
     delegate_noop,
-    globals::{registry_queue_init, GlobalListContents},
+    globals::{registry_queue_init, GlobalList, GlobalListContents},
     protocol::{wl_pointer, wl_registry, wl_seat},
     Connection, Dispatch, QueueHandle,
 };
@@ -20,64 +16,62 @@ use wayland_protocols::ext::idle_notify::v1::client::{
     ext_idle_notification_v1, ext_idle_notifier_v1,
 };
 
-struct TimeoutCmd {
+type Result<T> = std::result::Result<T, Box<dyn Error>>;
+
+struct TimeoutHandler {
     config: TimeoutConfig,
     notification: ext_idle_notification_v1::ExtIdleNotificationV1,
 }
 
-impl Deref for TimeoutCmd {
-    type Target = TimeoutConfig;
-
-    fn deref(&self) -> &Self::Target {
-        &self.config
-    }
-}
-
-impl TimeoutCmd {
+impl TimeoutHandler {
     fn new(
         config: TimeoutConfig,
         qh: &QueueHandle<Moxidle>,
         seat: &wl_seat::WlSeat,
         notifier: &ext_idle_notifier_v1::ExtIdleNotifierV1,
     ) -> Self {
-        let notification = notifier.get_idle_notification(config.timeout(), seat, qh, ());
+        let notification = notifier.get_idle_notification(config.timeout_millis(), seat, qh, ());
 
         Self {
             config,
             notification,
         }
     }
+
+    fn on_timeout(&self) -> Option<&Arc<str>> {
+        self.config.on_timeout.as_ref()
+    }
+
+    fn on_resume(&self) -> Option<&Arc<str>> {
+        self.config.on_resume.as_ref()
+    }
 }
 
 struct Moxidle {
     seat: wl_seat::WlSeat,
     notifier: ext_idle_notifier_v1::ExtIdleNotifierV1,
-    timeout_cmds: Vec<TimeoutCmd>,
+    timeouts: Vec<TimeoutHandler>,
     config: Arc<MoxidleConfig>,
     inhibited: bool,
     qh: QueueHandle<Self>,
     inotify: Inotify,
-    config_path: PathBuf,
 }
 
 impl Moxidle {
-    fn new(
-        globals: wayland_client::globals::GlobalList,
-        qh: QueueHandle<Self>,
-    ) -> Result<Self, Box<dyn error::Error>> {
+    fn init(globals: GlobalList, qh: QueueHandle<Self>) -> Result<Self> {
         let notifier = globals
-            .bind::<ext_idle_notifier_v1::ExtIdleNotifierV1, _, _>(&qh, 1..=1, ())
+            .bind(&qh, 1..=1, ())
             .expect("Compositor doesn't support ext-idle-notifier-v1");
 
         let seat = globals.bind::<wl_seat::WlSeat, _, _>(&qh, 1..=4, ())?;
         seat.get_pointer(&qh, ());
 
         let (config, config_path) = FullConfig::load()?;
-        let (config, timeouts) = config.apply();
+        let (general_config, timeout_configs) = config.split_into_parts();
 
-        let timeout_cmds = timeouts
+        let timeouts = timeout_configs
             .into_iter()
-            .map(|timeout| TimeoutCmd::new(timeout, &qh, &seat, &notifier))
+            .map(|cfg| TimeoutHandler::new(cfg, &qh, &seat, &notifier))
             .collect();
 
         let inotify = Inotify::init()?;
@@ -87,10 +81,9 @@ impl Moxidle {
         )?;
 
         Ok(Self {
-            config_path,
             inotify,
-            timeout_cmds,
-            config: config.into(),
+            timeouts,
+            config: Arc::new(general_config),
             notifier,
             seat,
             inhibited: false,
@@ -98,11 +91,10 @@ impl Moxidle {
         })
     }
 
-    fn handle_event(&mut self, event: Event) {
+    fn handle_app_event(&mut self, event: Event) {
         match event {
             Event::ScreensaverInhibit(inhibited) => {
                 self.inhibited = inhibited;
-
                 if !inhibited {
                     self.reset_idle_timers();
                 }
@@ -111,23 +103,37 @@ impl Moxidle {
     }
 
     fn reset_idle_timers(&mut self) {
-        self.timeout_cmds.iter_mut().for_each(|cmd| {
-            cmd.notification =
-                self.notifier
-                    .get_idle_notification(cmd.timeout(), &self.seat, &self.qh, ());
+        self.timeouts.iter_mut().for_each(|handler| {
+            handler.notification = self.notifier.get_idle_notification(
+                handler.config.timeout_millis(),
+                &self.seat,
+                &self.qh,
+                (),
+            );
         });
     }
-}
 
-impl Deref for Moxidle {
-    type Target = MoxidleConfig;
+    fn reload_config(&mut self) -> Result<()> {
+        let (new_config, _) = FullConfig::load()?;
+        let (general_config, timeout_configs) = new_config.split_into_parts();
 
-    fn deref(&self) -> &Self::Target {
-        &self.config
+        self.config = Arc::new(general_config);
+        self.timeouts = timeout_configs
+            .into_iter()
+            .map(|cfg| TimeoutHandler::new(cfg, &self.qh, &self.seat, &self.notifier))
+            .collect();
+
+        log::info!("Configuration reloaded successfully");
+        Ok(())
     }
 }
 
-fn run_command(command: Arc<str>) {
+#[derive(Debug)]
+enum Event {
+    ScreensaverInhibit(bool),
+}
+
+fn execute_command(command: Arc<str>) {
     let mut child = match Command::new("/bin/sh")
         .arg("-c")
         .arg(command.as_ref())
@@ -149,6 +155,7 @@ fn run_command(command: Arc<str>) {
     });
 }
 
+// Wayland event implementations
 impl Dispatch<wl_pointer::WlPointer, ()> for Moxidle {
     fn event(
         _: &mut Self,
@@ -175,28 +182,28 @@ impl Dispatch<ext_idle_notification_v1::ExtIdleNotificationV1, ()> for Moxidle {
             return;
         }
 
-        let Some(timeout_cmd) = state
-            .timeout_cmds
+        let Some(handler) = state
+            .timeouts
             .iter()
-            .find(|timeout_cmd| timeout_cmd.notification == *notification)
+            .find(|h| h.notification == *notification)
         else {
             return;
         };
 
         match event {
             ext_idle_notification_v1::Event::Idled => {
-                if let Some(on_timeout) = timeout_cmd.on_timeout.as_ref() {
-                    log::info!("Executing timeout command: {}", on_timeout);
-                    run_command(Arc::clone(on_timeout));
+                if let Some(cmd) = handler.on_timeout() {
+                    log::info!("Executing timeout command: {}", cmd);
+                    execute_command(cmd.clone());
                 }
             }
             ext_idle_notification_v1::Event::Resumed => {
-                if let Some(on_resume) = timeout_cmd.on_resume.as_ref() {
-                    log::info!("Executing resume command: {}", on_resume);
-                    run_command(Arc::clone(on_resume));
+                if let Some(cmd) = handler.on_resume() {
+                    log::info!("Executing resume command: {}", cmd);
+                    execute_command(cmd.clone());
                 }
             }
-            _ => {}
+            _ => (),
         }
     }
 }
@@ -205,10 +212,10 @@ impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for Moxidle {
     fn event(
         _: &mut Self,
         _: &wl_registry::WlRegistry,
-        _: <wl_registry::WlRegistry as wayland_client::Proxy>::Event,
+        _: wl_registry::Event,
         _: &GlobalListContents,
         _: &Connection,
-        _: &wayland_client::QueueHandle<Self>,
+        _: &QueueHandle<Self>,
     ) {
     }
 }
@@ -216,91 +223,60 @@ impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for Moxidle {
 delegate_noop!(Moxidle: ext_idle_notifier_v1::ExtIdleNotifierV1);
 delegate_noop!(Moxidle: ignore wl_seat::WlSeat);
 
-#[derive(Debug)]
-enum Event {
-    ScreensaverInhibit(bool),
-}
-
-fn main() -> Result<(), Box<dyn error::Error>> {
+fn main() -> Result<()> {
     env_logger::init();
 
     let conn = Connection::connect_to_env()?;
     let (globals, event_queue) = registry_queue_init(&conn)?;
     let qh = event_queue.handle();
 
-    let mut event_loop: EventLoop<Moxidle> = EventLoop::try_new()?;
-    let mut moxidle = Moxidle::new(globals, qh.clone())?;
+    let mut event_loop = EventLoop::try_new()?;
+    let mut moxidle = Moxidle::init(globals, qh.clone())?;
 
-    WaylandSource::new(conn, event_queue).insert(event_loop.handle())?;
+    WaylandSource::new(conn, event_queue)
+        .insert(event_loop.handle())
+        .map_err(|e| format!("Failed to insert Wayland source: {}", e))?;
 
-    let (executor, scheduler) = calloop::futures::executor()?;
-    let (sender, receiver) = channel::channel();
-
-    let config = Arc::clone(&moxidle.config);
-
-    scheduler.schedule(async move {
-        if let Err(err) = screensaver::serve(sender, config).await {
-            log::error!("failed to serve FreeDesktop screensaver interface: {}", err);
-        }
-    })?;
-
-    let inotify_fd = moxidle.inotify.as_raw_fd();
-    let source = calloop::generic::Generic::new(
-        unsafe { calloop::generic::FdWrapper::new(inotify_fd) },
-        calloop::Interest::READ,
-        calloop::Mode::Level,
+    let inotify_source = Generic::new(
+        unsafe { calloop::generic::FdWrapper::new(moxidle.inotify.as_raw_fd()) },
+        Interest::READ,
+        Mode::Level,
     );
-
     event_loop
         .handle()
-        .insert_source(source, |_, _, state: &mut Moxidle| {
+        .insert_source(inotify_source, |_, _, state| {
             let mut buffer = [0; 4096];
-            loop {
-                match state.inotify.read_events(&mut buffer) {
-                    Ok(events) => {
-                        events.for_each(|event| {
-                            if event.name.is_some() {
-                                match FullConfig::load() {
-                                    Ok((new_config, _)) => {
-                                        let (general_config, timeouts) = new_config.apply();
-                                        state.config = Arc::new(general_config);
-                                        state.timeout_cmds = timeouts
-                                            .into_iter()
-                                            .map(|timeout| {
-                                                TimeoutCmd::new(
-                                                    timeout,
-                                                    &state.qh,
-                                                    &state.seat,
-                                                    &state.notifier,
-                                                )
-                                            })
-                                            .collect();
-                                        log::info!("Config reloaded");
-                                    }
-                                    Err(e) => log::error!("Config reload failed: {}", e),
-                                }
-                            }
-                        });
-                    }
-                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
-                    Err(e) => {
-                        log::error!("Inotify error: {}", e);
-                        break;
-                    }
-                }
+            if let Err(e) = state.inotify.read_events(&mut buffer) {
+                log::error!("Inotify read error: {}", e);
+                return Ok(calloop::PostAction::Continue);
+            }
+
+            if let Err(e) = state.reload_config() {
+                log::error!("Config reload failed: {}", e);
             }
             Ok(calloop::PostAction::Continue)
         })?;
-    event_loop.handle().insert_source(executor, |_, _, _| {})?;
-    event_loop
-        .handle()
-        .insert_source(receiver, |event, _, state| {
-            if let channel::Event::Msg(event) = event {
-                state.handle_event(event);
+
+    if !moxidle.config.ignore_dbus_inhibit {
+        let (executor, scheduler) = calloop::futures::executor()?;
+        let (event_sender, event_receiver) = channel::channel();
+
+        scheduler.schedule(async move {
+            if let Err(e) = screensaver::serve(event_sender).await {
+                log::error!("D-Bus error: {}", e);
             }
         })?;
 
-    event_loop.run(None, &mut moxidle, |_| {})?;
+        event_loop.handle().insert_source(executor, |_, _, _| ())?;
+        event_loop
+            .handle()
+            .insert_source(event_receiver, |event, _, state| {
+                if let channel::Event::Msg(event) = event {
+                    state.handle_app_event(event);
+                }
+            })?;
+    }
 
+    event_loop.run(None, &mut moxidle, |_| {})?;
     Ok(())
 }

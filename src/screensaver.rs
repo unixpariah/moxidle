@@ -1,4 +1,4 @@
-use crate::{config::MoxidleConfig, Event};
+use crate::Event;
 use calloop::channel;
 use futures_lite::StreamExt;
 use std::sync::{
@@ -79,10 +79,7 @@ impl Screensaver {
     }
 }
 
-pub async fn serve(
-    event_sender: channel::Sender<Event>,
-    config: Arc<MoxidleConfig>,
-) -> zbus::Result<()> {
+pub async fn serve(event_sender: channel::Sender<Event>) -> zbus::Result<()> {
     let inhibitors = Arc::new(Mutex::new(Vec::new()));
 
     let screensaver = Screensaver {
@@ -91,42 +88,40 @@ pub async fn serve(
         last_cookie: Arc::new(AtomicU32::new(0)),
     };
 
-    if !config.ignore_dbus_inhibit {
-        let conn = zbus::connection::Builder::session()?
-            .serve_at("/ScreenSaver", screensaver.clone())?
-            .serve_at("/org/freedesktop/ScreenSaver", screensaver)?
-            .build()
-            .await?;
-
-        conn.request_name_with_flags(
-            "org.freedesktop.ScreenSaver",
-            zbus::fdo::RequestNameFlags::ReplaceExisting.into(),
-        )
+    let conn = zbus::connection::Builder::session()?
+        .serve_at("/ScreenSaver", screensaver.clone())?
+        .serve_at("/org/freedesktop/ScreenSaver", screensaver)?
+        .build()
         .await?;
 
-        let dbus = zbus::fdo::DBusProxy::new(&conn).await?;
-        let mut name_owner_stream = dbus.receive_name_owner_changed().await?;
+    conn.request_name_with_flags(
+        "org.freedesktop.ScreenSaver",
+        zbus::fdo::RequestNameFlags::ReplaceExisting.into(),
+    )
+    .await?;
 
-        while let Some(event) = name_owner_stream.next().await {
-            let args = event.args()?;
-            if args.new_owner.is_none() {
-                if let BusName::Unique(name) = args.name {
-                    let mut inhibitors = inhibitors.lock().await;
-                    let initial_count = inhibitors.len();
-                    inhibitors.retain(|inhibitor| inhibitor.client != name);
+    let dbus = zbus::fdo::DBusProxy::new(&conn).await?;
+    let mut name_owner_stream = dbus.receive_name_owner_changed().await?;
 
-                    let removed_count = initial_count - inhibitors.len();
-                    if removed_count > 0 {
-                        log::info!(
-                            "Removed {} inhibitors due to client disconnection: {:?}",
-                            removed_count,
-                            name
-                        );
+    while let Some(event) = name_owner_stream.next().await {
+        let args = event.args()?;
+        if args.new_owner.is_none() {
+            if let BusName::Unique(name) = args.name {
+                let mut inhibitors = inhibitors.lock().await;
+                let initial_count = inhibitors.len();
+                inhibitors.retain(|inhibitor| inhibitor.client != name);
 
-                        if inhibitors.is_empty() {
-                            if let Err(e) = event_sender.send(Event::ScreensaverInhibit(false)) {
-                                log::warn!("Failed to send screensaver event: {}", e);
-                            }
+                let removed_count = initial_count - inhibitors.len();
+                if removed_count > 0 {
+                    log::info!(
+                        "Removed {} inhibitors due to client disconnection: {:?}",
+                        removed_count,
+                        name
+                    );
+
+                    if inhibitors.is_empty() {
+                        if let Err(e) = event_sender.send(Event::ScreensaverInhibit(false)) {
+                            log::warn!("Failed to send screensaver event: {}", e);
                         }
                     }
                 }
