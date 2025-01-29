@@ -1,12 +1,14 @@
 mod config;
-#[cfg(feature = "dbus")]
 mod screensaver;
-#[cfg(feature = "dbus")]
-use calloop::channel;
 
+use calloop::channel;
 use calloop::EventLoop;
 use calloop_wayland_source::WaylandSource;
 use config::{FullConfig, MoxidleConfig, TimeoutConfig};
+use inotify::Inotify;
+use inotify::WatchMask;
+use std::os::fd::AsRawFd;
+use std::path::PathBuf;
 use std::{error, ops::Deref, process::Command, sync::Arc};
 use wayland_client::{
     delegate_noop,
@@ -51,9 +53,11 @@ struct Moxidle {
     seat: wl_seat::WlSeat,
     notifier: ext_idle_notifier_v1::ExtIdleNotifierV1,
     timeout_cmds: Vec<TimeoutCmd>,
-    config: MoxidleConfig,
+    config: Arc<MoxidleConfig>,
     inhibited: bool,
     qh: QueueHandle<Self>,
+    inotify: Inotify,
+    config_path: PathBuf,
 }
 
 impl Moxidle {
@@ -68,16 +72,25 @@ impl Moxidle {
         let seat = globals.bind::<wl_seat::WlSeat, _, _>(&qh, 1..=4, ())?;
         seat.get_pointer(&qh, ());
 
-        let (config, timeouts) = FullConfig::load()?.apply();
+        let (config, config_path) = FullConfig::load()?;
+        let (config, timeouts) = config.apply();
 
         let timeout_cmds = timeouts
             .into_iter()
             .map(|timeout| TimeoutCmd::new(timeout, &qh, &seat, &notifier))
             .collect();
 
+        let inotify = Inotify::init()?;
+        inotify.watches().add(
+            config_path.parent().unwrap(),
+            WatchMask::MODIFY | WatchMask::CREATE | WatchMask::DELETE,
+        )?;
+
         Ok(Self {
+            config_path,
+            inotify,
             timeout_cmds,
-            config,
+            config: config.into(),
             notifier,
             seat,
             inhibited: false,
@@ -87,7 +100,6 @@ impl Moxidle {
 
     fn handle_event(&mut self, event: Event) {
         match event {
-            #[cfg(feature = "dbus")]
             Event::ScreensaverInhibit(inhibited) => {
                 self.inhibited = inhibited;
 
@@ -206,56 +218,89 @@ delegate_noop!(Moxidle: ignore wl_seat::WlSeat);
 
 #[derive(Debug)]
 enum Event {
-    #[cfg(feature = "dbus")]
     ScreensaverInhibit(bool),
 }
 
 fn main() -> Result<(), Box<dyn error::Error>> {
     env_logger::init();
 
-    let conn = Connection::connect_to_env().expect("Wayland connection failed");
-    let (globals, event_queue) = registry_queue_init(&conn).unwrap();
+    let conn = Connection::connect_to_env()?;
+    let (globals, event_queue) = registry_queue_init(&conn)?;
     let qh = event_queue.handle();
 
-    let mut event_loop: EventLoop<Moxidle> = EventLoop::try_new().unwrap();
+    let mut event_loop: EventLoop<Moxidle> = EventLoop::try_new()?;
     let mut moxidle = Moxidle::new(globals, qh.clone())?;
 
-    WaylandSource::new(conn, event_queue)
-        .insert(event_loop.handle())
-        .unwrap();
+    WaylandSource::new(conn, event_queue).insert(event_loop.handle())?;
 
-    #[cfg(feature = "dbus")]
-    {
-        let (executor, scheduler) = calloop::futures::executor().unwrap();
-        let (sender, receiver) = channel::channel();
+    let (executor, scheduler) = calloop::futures::executor()?;
+    let (sender, receiver) = channel::channel();
 
-        if !moxidle.ignore_dbus_inhibit {
-            scheduler
-                .schedule(async move {
-                    if let Err(err) = screensaver::serve(sender).await {
-                        log::error!("failed to serve FreeDesktop screensaver interface: {}", err);
-                    }
-                })
-                .unwrap();
+    let config = Arc::clone(&moxidle.config);
+
+    scheduler.schedule(async move {
+        if let Err(err) = screensaver::serve(sender, config).await {
+            log::error!("failed to serve FreeDesktop screensaver interface: {}", err);
         }
+    })?;
 
-        event_loop
-            .handle()
-            .insert_source(executor, |_, _, _| {})
-            .unwrap();
-        event_loop
-            .handle()
-            .insert_source(receiver, |event, _, state| {
-                if let channel::Event::Msg(event) = event {
-                    state.handle_event(event);
-                }
-            })
-            .unwrap();
-    }
+    let inotify_fd = moxidle.inotify.as_raw_fd();
+    let source = calloop::generic::Generic::new(
+        unsafe { calloop::generic::FdWrapper::new(inotify_fd) },
+        calloop::Interest::READ,
+        calloop::Mode::Level,
+    );
 
     event_loop
-        .run(None, &mut moxidle, |_| {})
-        .expect("Event loop failed");
+        .handle()
+        .insert_source(source, |_, _, state: &mut Moxidle| {
+            let mut buffer = [0; 4096];
+            loop {
+                match state.inotify.read_events(&mut buffer) {
+                    Ok(events) => {
+                        events.for_each(|event| {
+                            if event.name.is_some() {
+                                match FullConfig::load() {
+                                    Ok((new_config, _)) => {
+                                        let (general_config, timeouts) = new_config.apply();
+                                        state.config = Arc::new(general_config);
+                                        state.timeout_cmds = timeouts
+                                            .into_iter()
+                                            .map(|timeout| {
+                                                TimeoutCmd::new(
+                                                    timeout,
+                                                    &state.qh,
+                                                    &state.seat,
+                                                    &state.notifier,
+                                                )
+                                            })
+                                            .collect();
+                                        log::info!("Config reloaded");
+                                    }
+                                    Err(e) => log::error!("Config reload failed: {}", e),
+                                }
+                            }
+                        });
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                    Err(e) => {
+                        log::error!("Inotify error: {}", e);
+                        break;
+                    }
+                }
+            }
+            Ok(calloop::PostAction::Continue)
+        })?;
+    event_loop.handle().insert_source(executor, |_, _, _| {})?;
+    event_loop
+        .handle()
+        .insert_source(receiver, |event, _, state| {
+            if let channel::Event::Msg(event) = event {
+                state.handle_event(event);
+            }
+        })?;
+
+    event_loop.run(None, &mut moxidle, |_| {})?;
 
     Ok(())
 }

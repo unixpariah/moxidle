@@ -1,7 +1,6 @@
-use std::{fs, path::PathBuf, sync::Arc};
-
 use mlua::{Lua, LuaSerdeExt};
 use serde::Deserialize;
+use std::{fs, path::PathBuf, sync::Arc};
 
 #[derive(Deserialize)]
 pub struct FullConfig {
@@ -10,14 +9,12 @@ pub struct FullConfig {
 }
 
 impl FullConfig {
-    pub fn load() -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn load() -> Result<(Self, PathBuf), Box<dyn std::error::Error>> {
         let config_path = get_config_path()?;
-        let lua_code = fs::read_to_string(config_path)?;
-
+        let lua_code = fs::read_to_string(&config_path)?;
         let lua = Lua::new();
         let lua_result = lua.load(&lua_code).eval()?;
-
-        lua.from_value(lua_result).map_err(|e| e.into())
+        Ok((lua.from_value(lua_result)?, config_path))
     }
 
     pub fn apply(self) -> (MoxidleConfig, Vec<TimeoutConfig>) {
@@ -25,7 +22,7 @@ impl FullConfig {
     }
 }
 
-fn get_config_path() -> Result<PathBuf, Box<dyn std::error::Error>> {
+pub fn get_config_path() -> Result<PathBuf, Box<dyn std::error::Error>> {
     let config_dir = std::env::var("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .or_else(|_| std::env::var("HOME").map(|home| PathBuf::from(home).join(".config")))?;
@@ -41,7 +38,6 @@ pub struct MoxidleConfig {
     pub after_sleep_cmd: Option<Arc<str>>,
     pub ignore_systemd_inhibit: bool,
     pub ignore_audio_inhibit: bool,
-    #[cfg(feature = "dbus")]
     pub ignore_dbus_inhibit: bool,
 }
 

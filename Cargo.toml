@@ -12,9 +12,7 @@ mlua = { version = "0.10.3", features = [ "lua54", "serialize" ] }
 serde = { version = "1.0.217", features = [ "rc", "derive" ] }
 wayland-client = "0.31.7"
 wayland-protocols = { version = "0.32.5", features = [ "staging", "client" ] }
-futures-lite = { version = "2.6.0", optional = true }
-zbus = { version = "5.3.1", optional = true }
-
-[features]
-dbus = ["dep:zbus", "dep:futures-lite"]
-systemd = ["dbus"]
+futures-lite = "2.6.0"
+zbus = "5.3.1"
+tokio = { version = "1.43.0", features = ["fs", "rt", "sync", "tokio-macros"] }
+inotify = "0.11.0"
