@@ -5,8 +5,9 @@ use calloop::channel;
 use futures_lite::StreamExt;
 use std::sync::{
     atomic::{AtomicU32, Ordering},
-    Arc, Mutex,
+    Arc,
 };
+use tokio::sync::Mutex;
 
 use crate::Event;
 
@@ -27,7 +28,7 @@ struct Screensaver {
 
 #[zbus::interface(name = "org.freedesktop.ScreenSaver")]
 impl Screensaver {
-    fn inhibit(
+    async fn inhibit(
         &mut self,
         application_name: String,
         reason_for_inhibit: String,
@@ -42,9 +43,11 @@ impl Screensaver {
                 reason_for_inhibit,
                 cookie
             );
-            let mut inhibitors = self.inhibitors.lock().unwrap();
+            let mut inhibitors = self.inhibitors.lock().await;
             if inhibitors.is_empty() {
-                let _ = self.event_sender.send(Event::ScreensaverInhibit(true));
+                if let Err(e) = self.event_sender.send(Event::ScreensaverInhibit(true)) {
+                    log::error!("Failed to send ScreensaverInhibit event {}", e);
+                }
             }
             inhibitors.push(Inhibitor {
                 cookie,
@@ -56,12 +59,14 @@ impl Screensaver {
         cookie
     }
 
-    fn un_inhibit(&mut self, cookie: u32) {
-        let mut inhibitors = self.inhibitors.lock().unwrap();
+    async fn un_inhibit(&mut self, cookie: u32) {
+        let mut inhibitors = self.inhibitors.lock().await;
         if let Some(idx) = inhibitors.iter().position(|x| x.cookie == cookie) {
             let inhibitor = inhibitors.remove(idx);
             if inhibitors.is_empty() {
-                let _ = self.event_sender.send(Event::ScreensaverInhibit(false));
+                if let Err(e) = self.event_sender.send(Event::ScreensaverInhibit(false)) {
+                    log::error!("Failed to send ScreensaverInhibit event {}", e);
+                }
             }
             log::info!(
                 "Removed screensaver inhibitor for application '{}' {:?}, reason: {}, cookie: {}",
@@ -90,7 +95,6 @@ pub async fn serve(
         last_cookie: Arc::new(AtomicU32::new(0)),
     };
 
-    // Clients vary in which path they use
     let conn = zbus::connection::Builder::session()?
         .serve_at("/ScreenSaver", screensaver.clone())?
         .serve_at("/org/freedesktop/ScreenSaver", screensaver)?
@@ -102,18 +106,20 @@ pub async fn serve(
     )
     .await?;
 
-    // If a client disconnects from DBus, remove any inhibitors it has added.
     let dbus = zbus::fdo::DBusProxy::new(&conn).await?;
     let mut name_owner_stream = dbus.receive_name_owner_changed().await?;
     while let Some(event) = name_owner_stream.next().await {
-        let args = event.args()?;
-        if args.new_owner.is_none() {
-            if let zbus::names::BusName::Unique(name) = args.name {
-                let mut inhibitors = inhibitors.lock().unwrap();
-                if !inhibitors.is_empty() {
-                    inhibitors.retain(|inhibitor| inhibitor.client != name);
-                    if inhibitors.is_empty() {
-                        let _ = event_sender.send(Event::ScreensaverInhibit(false));
+        if let Ok(args) = event.args() {
+            if args.new_owner.is_none() {
+                if let zbus::names::BusName::Unique(name) = args.name {
+                    let mut inhibitors = inhibitors.lock().await;
+                    if !inhibitors.is_empty() {
+                        inhibitors.retain(|inhibitor| inhibitor.client != name);
+                        if inhibitors.is_empty() {
+                            if let Err(e) = event_sender.send(Event::ScreensaverInhibit(false)) {
+                                log::error!("Failed to get ScreensaverInhibit args {}", e);
+                            }
+                        }
                     }
                 }
             }

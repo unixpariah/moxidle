@@ -2,6 +2,7 @@ mod audio;
 mod config;
 mod login;
 mod screensaver;
+mod upower;
 
 use calloop::{channel, EventLoop};
 use calloop_wayland_source::WaylandSource;
@@ -55,6 +56,7 @@ struct Moxidle {
     config: MoxidleConfig,
     inhibited: bool,
     qh: QueueHandle<Self>,
+    on_battery: bool,
 }
 
 impl Deref for Moxidle {
@@ -82,6 +84,7 @@ impl Moxidle {
             .collect();
 
         Ok(Self {
+            on_battery: false,
             timeouts,
             config: general_config,
             notifier,
@@ -93,6 +96,7 @@ impl Moxidle {
 
     fn handle_app_event(&mut self, event: Event) {
         match event {
+            Event::OnBattery(on_battery) => self.on_battery = on_battery,
             Event::ScreensaverInhibit(inhibited) => {
                 self.inhibited = inhibited;
                 self.reset_idle_timers();
@@ -156,6 +160,7 @@ impl Moxidle {
 
 #[derive(Debug)]
 enum Event {
+    OnBattery(bool),
     ScreensaverInhibit(bool),
     SessionLocked(bool),
     BlockInhibited(String),
@@ -236,16 +241,6 @@ delegate_noop!(Moxidle: wl_pointer::WlPointer);
 delegate_noop!(Moxidle: ext_idle_notifier_v1::ExtIdleNotifierV1);
 delegate_noop!(Moxidle: ignore wl_seat::WlSeat);
 
-//async fn receive_battery_task(sender: EventSender) -> zbus::Result<()> {
-//    let connection = zbus::Connection::system().await?;
-//    let upower = UPowerProxy::new(&connection).await?;
-//    let mut stream = upower.receive_on_battery_changed().await;
-//    while let Some(event) = stream.next().await {
-//        let _ = sender.send(Event::OnBattery(event.get().await?));
-//    }
-//    Ok(())
-//}
-
 #[tokio::main]
 async fn main() -> Result<()> {
     env_logger::init();
@@ -263,6 +258,15 @@ async fn main() -> Result<()> {
 
     let (executor, scheduler) = calloop::futures::executor()?;
     let (event_sender, event_receiver) = channel::channel();
+
+    {
+        let event_sender = event_sender.clone();
+        scheduler.schedule(async move {
+            if let Err(e) = upower::serve(event_sender).await {
+                log::error!("D-Bus screensaver error: {}", e);
+            }
+        })?;
+    }
 
     {
         let ignore_dbus_inhibit = moxidle.ignore_dbus_inhibit;

@@ -45,7 +45,15 @@ pub struct MoxidleConfig {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Condition {
+    OnBattery,
+    OnAc,
+}
+
+#[derive(Deserialize)]
 pub struct TimeoutConfig {
+    pub condition: Option<Condition>,
     pub timeout: u32,
     pub on_timeout: Option<Arc<str>>,
     pub on_resume: Option<Arc<str>>,
