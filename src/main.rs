@@ -1,7 +1,11 @@
+#[cfg(feature = "audio")]
 mod audio;
 mod config;
+#[cfg(feature = "systemd")]
 mod login;
+#[cfg(feature = "dbus")]
 mod screensaver;
+#[cfg(feature = "upower")]
 mod upower;
 
 use calloop::{channel, EventLoop};
@@ -64,6 +68,7 @@ struct Moxidle {
     config: MoxidleConfig,
     inhibited: bool,
     qh: QueueHandle<Self>,
+    #[cfg(feature = "upower")]
     on_battery: bool,
 }
 
@@ -92,6 +97,7 @@ impl Moxidle {
             .collect();
 
         Ok(Self {
+            #[cfg(feature = "upower")]
             on_battery: false,
             timeouts,
             config: general_config,
@@ -104,14 +110,22 @@ impl Moxidle {
 
     fn handle_app_event(&mut self, event: Event) {
         match event {
+            #[cfg(feature = "upower")]
             Event::OnBattery(on_battery) => {
                 self.on_battery = on_battery;
                 self.reset_idle_timers();
             }
+            #[cfg(feature = "dbus")]
             Event::ScreensaverInhibit(inhibited) => {
                 self.inhibited = inhibited;
                 self.reset_idle_timers();
             }
+            #[cfg(feature = "audio")]
+            Event::AudioInhibit(inhibited) => {
+                self.inhibited = inhibited;
+                self.reset_idle_timers();
+            }
+            #[cfg(feature = "systemd")]
             Event::BlockInhibited(inhibition) => {
                 if inhibition.contains("idle") {
                     if !self.inhibited {
@@ -125,10 +139,7 @@ impl Moxidle {
                     log::info!("systemd idle inhibit inactive");
                 }
             }
-            Event::AudioInhibit(inhibited) => {
-                self.inhibited = inhibited;
-                self.reset_idle_timers();
-            }
+            #[cfg(feature = "systemd")]
             Event::SessionLocked(locked) => {
                 if locked {
                     if let Some(lock_cmd) = self.lock_cmd.as_ref() {
@@ -138,6 +149,7 @@ impl Moxidle {
                     execute_command(unlock_cmd.clone());
                 }
             }
+            #[cfg(feature = "systemd")]
             Event::PrepareForSleep(sleep) => {
                 if sleep {
                     if let Some(before_sleep_cmd) = self.before_sleep_cmd.as_ref() {
@@ -160,6 +172,7 @@ impl Moxidle {
             self.timeouts.iter_mut().for_each(|handler| {
                 if let Some(condition) = handler.condition.as_ref() {
                     match condition {
+                        #[cfg(feature = "upower")]
                         config::Condition::OnBattery => {
                             if self.on_battery {
                                 handler.notification = self.notifier.get_idle_notification(
@@ -170,6 +183,7 @@ impl Moxidle {
                                 );
                             }
                         }
+                        #[cfg(feature = "upower")]
                         config::Condition::OnAc => {
                             if !self.on_battery {
                                 handler.notification = self.notifier.get_idle_notification(
@@ -180,6 +194,8 @@ impl Moxidle {
                                 );
                             }
                         }
+                        _ => {} // TODO: remove this once there are conditions that aren't upower
+                                // related
                     }
                 } else {
                     handler.notification = self.notifier.get_idle_notification(
@@ -196,11 +212,17 @@ impl Moxidle {
 
 #[derive(Debug)]
 enum Event {
+    #[cfg(feature = "upower")]
     OnBattery(bool),
+    #[cfg(feature = "dbus")]
     ScreensaverInhibit(bool),
+    #[cfg(feature = "systemd")]
     SessionLocked(bool),
+    #[cfg(feature = "systemd")]
     BlockInhibited(String),
+    #[cfg(feature = "systemd")]
     PrepareForSleep(bool),
+    #[cfg(feature = "audio")]
     AudioInhibit(bool),
 }
 
@@ -295,15 +317,17 @@ async fn main() -> Result<()> {
     let (executor, scheduler) = calloop::futures::executor()?;
     let (event_sender, event_receiver) = channel::channel();
 
+    #[cfg(feature = "upower")]
     {
         let event_sender = event_sender.clone();
         scheduler.schedule(async move {
             if let Err(e) = upower::serve(event_sender).await {
-                log::error!("D-Bus screensaver error: {}", e);
+                log::error!("D-Bus upower error: {}", e);
             }
         })?;
     }
 
+    #[cfg(feature = "dbus")]
     {
         let ignore_dbus_inhibit = moxidle.ignore_dbus_inhibit;
         let event_sender = event_sender.clone();
@@ -314,6 +338,7 @@ async fn main() -> Result<()> {
         })?;
     }
 
+    #[cfg(feature = "systemd")]
     {
         let ignore_systemd_inhibit = moxidle.ignore_systemd_inhibit;
         let event_sender = event_sender.clone();
@@ -324,6 +349,7 @@ async fn main() -> Result<()> {
         })?;
     }
 
+    #[cfg(feature = "audio")]
     {
         let ignore_audio_inhibit = moxidle.ignore_audio_inhibit;
         let event_sender = event_sender.clone();
