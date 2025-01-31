@@ -1,6 +1,7 @@
 // https://specifications.freedesktop.org/idle-inhibit-spec/latest
 // https://invent.kde.org/plasma/kscreenlocker/-/blob/master/dbus/org.freedesktop.ScreenSaver.xml
 
+use crate::Event;
 use calloop::channel;
 use futures_lite::StreamExt;
 use std::sync::{
@@ -8,8 +9,6 @@ use std::sync::{
     Arc,
 };
 use tokio::sync::Mutex;
-
-use crate::Event;
 
 #[derive(Debug)]
 pub struct Inhibitor {

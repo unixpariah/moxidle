@@ -10,8 +10,11 @@ mod upower;
 
 use calloop::{channel, EventLoop};
 use calloop_wayland_source::WaylandSource;
+use clap::Parser;
 use config::{FullConfig, MoxidleConfig, TimeoutConfig};
-use std::{error::Error, ops::Deref, process::Command, sync::Arc};
+use env_logger::Builder;
+use log::LevelFilter;
+use std::{error::Error, ops::Deref, path::PathBuf, process::Command, sync::Arc};
 use wayland_client::{
     delegate_noop,
     globals::{registry_queue_init, GlobalList, GlobalListContents},
@@ -81,7 +84,11 @@ impl Deref for Moxidle {
 }
 
 impl Moxidle {
-    fn init(globals: GlobalList, qh: QueueHandle<Self>) -> Result<Self> {
+    fn init(
+        globals: GlobalList,
+        qh: QueueHandle<Self>,
+        config_path: Option<PathBuf>,
+    ) -> Result<Self> {
         let notifier = globals
             .bind(&qh, 1..=1, ())
             .expect("Compositor doesn't support ext-idle-notifier-v1");
@@ -89,7 +96,7 @@ impl Moxidle {
         let seat = globals.bind::<wl_seat::WlSeat, _, _>(&qh, 1..=4, ())?;
         seat.get_pointer(&qh, ());
 
-        let (general_config, timeout_configs) = FullConfig::load()?.split_into_parts();
+        let (general_config, timeout_configs) = FullConfig::load(config_path)?.split_into_parts();
 
         let timeouts = timeout_configs
             .into_iter()
@@ -171,8 +178,8 @@ impl Moxidle {
             log::debug!("Resetting idle timers");
             self.timeouts.iter_mut().for_each(|handler| {
                 if let Some(condition) = handler.condition.as_ref() {
+                    #[cfg(feature = "upower")]
                     match condition {
-                        #[cfg(feature = "upower")]
                         config::Condition::OnBattery => {
                             if self.on_battery {
                                 handler.notification = self.notifier.get_idle_notification(
@@ -183,7 +190,6 @@ impl Moxidle {
                                 );
                             }
                         }
-                        #[cfg(feature = "upower")]
                         config::Condition::OnAc => {
                             if !self.on_battery {
                                 handler.notification = self.notifier.get_idle_notification(
@@ -194,8 +200,6 @@ impl Moxidle {
                                 );
                             }
                         }
-                        _ => {} // TODO: remove this once there are conditions that aren't upower
-                                // related
                     }
                 } else {
                     handler.notification = self.notifier.get_idle_notification(
@@ -299,16 +303,53 @@ delegate_noop!(Moxidle: wl_pointer::WlPointer);
 delegate_noop!(Moxidle: ext_idle_notifier_v1::ExtIdleNotifierV1);
 delegate_noop!(Moxidle: ignore wl_seat::WlSeat);
 
+#[derive(Parser)]
+#[command(author, version, about, long_about = None)]
+struct Cli {
+    #[arg(short, long, action = clap::ArgAction::Count)]
+    verbose: u8,
+
+    #[arg(short, long, action = clap::ArgAction::Count)]
+    quiet: u8,
+
+    #[arg(short, long, value_name = "FILE", help = "Path to the config file")]
+    config: Option<PathBuf>,
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
-    env_logger::init();
+    let cli = Cli::parse();
+
+    let mut log_level = LevelFilter::Error;
+
+    (0..cli.quiet).for_each(|_| {
+        log_level = match log_level {
+            LevelFilter::Error => LevelFilter::Warn,
+            LevelFilter::Warn => LevelFilter::Info,
+            LevelFilter::Info => LevelFilter::Debug,
+            LevelFilter::Debug => LevelFilter::Trace,
+            _ => log_level,
+        };
+    });
+
+    (0..cli.quiet).for_each(|_| {
+        log_level = match log_level {
+            LevelFilter::Warn => LevelFilter::Error,
+            LevelFilter::Info => LevelFilter::Warn,
+            LevelFilter::Debug => LevelFilter::Info,
+            LevelFilter::Trace => LevelFilter::Debug,
+            _ => log_level,
+        };
+    });
+
+    Builder::new().filter_level(log_level).init();
 
     let conn = Connection::connect_to_env()?;
     let (globals, event_queue) = registry_queue_init(&conn)?;
     let qh = event_queue.handle();
 
     let mut event_loop = EventLoop::try_new()?;
-    let mut moxidle = Moxidle::init(globals, qh.clone())?;
+    let mut moxidle = Moxidle::init(globals, qh.clone(), cli.config)?;
 
     WaylandSource::new(conn, event_queue)
         .insert(event_loop.handle())

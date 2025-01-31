@@ -9,8 +9,12 @@ pub struct FullConfig {
 }
 
 impl FullConfig {
-    pub fn load() -> Result<Self, Box<dyn std::error::Error>> {
-        let config_path = Self::config_path()?;
+    pub fn load(path: Option<PathBuf>) -> Result<Self, Box<dyn std::error::Error>> {
+        let config_path = if let Some(path) = path {
+            path
+        } else {
+            Self::config_path()?
+        };
         let lua_code = fs::read_to_string(&config_path)?;
         let lua = Lua::new();
         let lua_result = lua.load(&lua_code).eval()?;

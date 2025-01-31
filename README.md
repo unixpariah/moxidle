@@ -42,7 +42,6 @@ You can define multiple timeout rules. If `on_timeout` or `on_resume` is omitted
 
 ## Buildtime dependencies
 
-- wayland-protocols
 - Lua 5.4
 - libpulseaudio (Optional if disabling default features)
 - Rust 

@@ -1,5 +1,5 @@
-use std::{cell::Cell, rc::Rc};
-
+use crate::Event;
+use calloop::channel;
 use libpulse_binding::{
     self as pulse,
     callbacks::ListResult,
@@ -7,10 +7,8 @@ use libpulse_binding::{
     error::PAErr,
     mainloop::threaded::Mainloop,
 };
-
-use crate::Event;
-use calloop::channel;
 use pulse::context::Context;
+use std::{cell::Cell, rc::Rc};
 
 pub async fn serve(
     event_sender: channel::Sender<Event>,
