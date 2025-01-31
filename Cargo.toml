@@ -14,7 +14,7 @@ wayland-client = "0.31.7"
 wayland-protocols = { version = "0.32.5", features = [ "staging", "client" ] }
 futures-lite = "2.6.0"
 zbus = { version = "5.3.1", optional = true }
-tokio = { version = "1.43.0", features = ["macros", "rt-multi-thread", "sync"] }
+tokio = { version = "1.43.0", features = [ "macros", "rt-multi-thread", "sync" ] }
 libpulse-binding = { version = "2.28.2", optional = true }
 
 [features]

@@ -29,7 +29,7 @@ return {
   },
   timeouts = {
     {
-      condition = "on_battery" -- Condition needed to be fullfilled for timeout to run
+      condition = "on_battery", -- Condition needed to be fullfilled for timeout to run
       timeout = 300, -- Idle timeout in seconds
       on_timeout = "pidof hyprlock || hyprlock", -- Command executed on timeout
       on_resume = "notify-send 'Welcome back!'", -- Command executed on user activity
@@ -58,10 +58,10 @@ You can define multiple timeout rules. If `on_timeout` or `on_resume` is omitted
 cargo build --release
 ```
 
-If you wish to disable dbus/systemd/audio/upower integration use and enable necessary ones with individual feature flags
+If you wish to disable dbus/systemd/audio/upower integration use this command
 
 ```sh
-cargo build --no-default-features
+cargo build --no-default-features --features="dbus systemd upower audio"
 ```
 
 ### Feature flags
