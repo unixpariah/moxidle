@@ -35,4 +35,13 @@ rustPlatform.buildRustPackage {
   configurePhase = ''
     export PKG_CONFIG_PATH=${lua5_4}/lib/pkgconfig:${libpulseaudio}/lib/pkgconfig
   '';
+
+  meta = with lib; {
+    description = "Idle daemon with conditional timeouts and build in audio inhibitor";
+    mainProgram = "moxidle";
+    homepage = "https://github.com/unixpariah/moxidle";
+    license = licenses.gpl3;
+    maintainers = with maintainers; [ unixpariah ];
+    platforms = platforms.unix;
+  };
 }
