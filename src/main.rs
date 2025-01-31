@@ -1,4 +1,5 @@
 mod config;
+mod login;
 mod screensaver;
 
 use calloop::{channel, generic::Generic, EventLoop, Interest, Mode};
@@ -100,7 +101,6 @@ impl Moxidle {
     }
 
     fn handle_app_event(&mut self, event: Event) {
-        println!("{:?}", event);
         match event {
             Event::ScreensaverInhibit(inhibited) => {
                 self.inhibited = inhibited;
@@ -108,24 +108,42 @@ impl Moxidle {
                     self.reset_idle_timers();
                 }
             }
-            Event::SessionLocked(locked) => match locked {
-                true => {
-                    if let Some(lock_cmd) = self.config.lock_cmd.as_ref() {
-                        execute_command(lock_cmd.clone())
+            Event::BlockInhibited(inhibition) => {
+                if inhibition.contains(":idle:") {
+                    if !self.inhibited {
+                        self.inhibited = true;
+                        log::info!("systemd idle inhibit active");
+                        self.reset_idle_timers();
+                    }
+                } else {
+                    self.inhibited = false;
+                    log::info!("systemd idle inhibit inactive");
+                }
+            }
+            Event::SessionLocked(locked) => {
+                if locked {
+                    if let Some(lock_cmd) = self.lock_cmd.as_ref() {
+                        execute_command(lock_cmd.clone());
+                    }
+                } else if let Some(unlock_cmd) = self.unlock_cmd.as_ref() {
+                    execute_command(unlock_cmd.clone());
+                }
+            }
+            Event::PrepareForSleep(sleep) => {
+                if sleep {
+                    if let Some(before_sleep_cmd) = self.before_sleep_cmd.as_ref() {
+                        execute_command(before_sleep_cmd.clone());
+                    } else if let Some(after_sleep_cmd) = self.after_sleep_cmd.as_ref() {
+                        execute_command(after_sleep_cmd.clone());
                     }
                 }
-                false => {
-                    if let Some(unlock_cmd) = self.config.unlock_cmd.as_ref() {
-                        execute_command(unlock_cmd.clone())
-                    }
-                }
-            },
-            Event::BlockInhibited(ihibition) => {}
+            }
         }
     }
 
     fn reset_idle_timers(&mut self) {
         self.timeouts.iter_mut().for_each(|handler| {
+            handler.notification.destroy();
             handler.notification = self.notifier.get_idle_notification(
                 handler.config.timeout_millis(),
                 &self.seat,
@@ -155,6 +173,7 @@ enum Event {
     ScreensaverInhibit(bool),
     SessionLocked(bool),
     BlockInhibited(String),
+    PrepareForSleep(bool),
 }
 
 fn execute_command(command: Arc<str>) {
@@ -188,11 +207,6 @@ impl Dispatch<ext_idle_notification_v1::ExtIdleNotificationV1, ()> for Moxidle {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
-        if state.inhibited {
-            log::debug!("Ignoring idle event due to active inhibition");
-            return;
-        }
-
         let Some(handler) = state
             .timeouts
             .iter()
@@ -202,7 +216,7 @@ impl Dispatch<ext_idle_notification_v1::ExtIdleNotificationV1, ()> for Moxidle {
         };
 
         match event {
-            ext_idle_notification_v1::Event::Idled => {
+            ext_idle_notification_v1::Event::Idled if !state.inhibited => {
                 if let Some(cmd) = handler.on_timeout() {
                     log::info!("Executing timeout command: {}", cmd);
                     execute_command(cmd.clone());
@@ -283,11 +297,25 @@ async fn main() -> Result<()> {
     let (executor, scheduler) = calloop::futures::executor()?;
     let (event_sender, event_receiver) = channel::channel();
 
-    scheduler.schedule(async move {
-        if let Err(e) = screensaver::serve(event_sender).await {
-            log::error!("D-Bus error: {}", e);
-        }
-    })?;
+    {
+        let ignore_dbus_inhibit = moxidle.ignore_dbus_inhibit.clone();
+        let event_sender = event_sender.clone();
+        scheduler.schedule(async move {
+            if let Err(e) = screensaver::serve(event_sender, ignore_dbus_inhibit).await {
+                log::error!("D-Bus error: {}", e);
+            }
+        })?;
+    }
+
+    {
+        let ignore_systemd_inhibit = moxidle.ignore_systemd_inhibit.clone();
+        let event_sender = event_sender.clone();
+        scheduler.schedule(async move {
+            if let Err(e) = login::serve(event_sender, ignore_systemd_inhibit).await {
+                log::error!("D-Bus error: {}", e);
+            }
+        })?;
+    }
 
     event_loop.handle().insert_source(executor, |_, _, _| ())?;
     event_loop

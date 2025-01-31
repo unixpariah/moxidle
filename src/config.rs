@@ -1,6 +1,10 @@
 use mlua::{Lua, LuaSerdeExt};
 use serde::Deserialize;
-use std::{fs, path::PathBuf, sync::Arc};
+use std::{
+    fs,
+    path::PathBuf,
+    sync::{atomic::AtomicBool, Arc},
+};
 
 #[derive(Deserialize)]
 pub struct FullConfig {
@@ -37,11 +41,11 @@ pub struct MoxidleConfig {
     pub before_sleep_cmd: Option<Arc<str>>,
     pub after_sleep_cmd: Option<Arc<str>>,
     #[serde(default)]
-    pub ignore_systemd_inhibit: bool,
+    pub ignore_systemd_inhibit: Arc<AtomicBool>,
     #[serde(default)]
-    pub ignore_audio_inhibit: bool,
+    pub ignore_audio_inhibit: Arc<AtomicBool>,
     #[serde(default)]
-    pub ignore_dbus_inhibit: bool,
+    pub ignore_dbus_inhibit: Arc<AtomicBool>,
 }
 
 #[derive(Deserialize)]
