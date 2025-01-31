@@ -94,19 +94,18 @@ impl Moxidle {
         match event {
             Event::ScreensaverInhibit(inhibited) => {
                 self.inhibited = inhibited;
-                if !inhibited {
-                    self.reset_idle_timers();
-                }
+                self.reset_idle_timers();
             }
             Event::BlockInhibited(inhibition) => {
-                if inhibition.contains(":idle:") {
+                if inhibition.contains("idle") {
                     if !self.inhibited {
                         self.inhibited = true;
                         log::info!("systemd idle inhibit active");
-                        self.reset_idle_timers();
                     }
+                    self.reset_idle_timers();
                 } else {
                     self.inhibited = false;
+                    self.reset_idle_timers();
                     log::info!("systemd idle inhibit inactive");
                 }
             }
@@ -134,13 +133,19 @@ impl Moxidle {
     fn reset_idle_timers(&mut self) {
         self.timeouts.iter_mut().for_each(|handler| {
             handler.notification.destroy();
-            handler.notification = self.notifier.get_idle_notification(
-                handler.config.timeout_millis(),
-                &self.seat,
-                &self.qh,
-                (),
-            );
         });
+
+        if !self.inhibited {
+            log::debug!("Resetting idle timers");
+            self.timeouts.iter_mut().for_each(|handler| {
+                handler.notification = self.notifier.get_idle_notification(
+                    handler.config.timeout_millis(),
+                    &self.seat,
+                    &self.qh,
+                    (),
+                );
+            });
+        }
     }
 }
 
@@ -192,7 +197,7 @@ impl Dispatch<ext_idle_notification_v1::ExtIdleNotificationV1, ()> for Moxidle {
         };
 
         match event {
-            ext_idle_notification_v1::Event::Idled if !state.inhibited => {
+            ext_idle_notification_v1::Event::Idled => {
                 if let Some(cmd) = handler.on_timeout() {
                     log::info!("Executing timeout command: {}", cmd);
                     execute_command(cmd.clone());
@@ -254,21 +259,21 @@ async fn main() -> Result<()> {
     let (event_sender, event_receiver) = channel::channel();
 
     {
-        let ignore_dbus_inhibit = moxidle.ignore_dbus_inhibit.clone();
+        let ignore_dbus_inhibit = moxidle.ignore_dbus_inhibit;
         let event_sender = event_sender.clone();
         scheduler.schedule(async move {
             if let Err(e) = screensaver::serve(event_sender, ignore_dbus_inhibit).await {
-                log::error!("D-Bus error: {}", e);
+                log::error!("D-Bus screensaver error: {}", e);
             }
         })?;
     }
 
     {
-        let ignore_systemd_inhibit = moxidle.ignore_systemd_inhibit.clone();
+        let ignore_systemd_inhibit = moxidle.ignore_systemd_inhibit;
         let event_sender = event_sender.clone();
         scheduler.schedule(async move {
             if let Err(e) = login::serve(event_sender, ignore_systemd_inhibit).await {
-                log::error!("D-Bus error: {}", e);
+                log::error!("D-Bus login manager error: {}", e);
             }
         })?;
     }

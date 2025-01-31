@@ -66,7 +66,7 @@ pub async fn serve(
             tokio::spawn(async move {
                 let mut stream = login_manager.receive_block_inhibited_changed().await;
                 while let Some(change) = stream.next().await {
-                    if change.name() == "org.freedesktop.login1.Manager" {
+                    if change.name() == "BlockInhibited" {
                         if let Ok(block_inhibited) = change.get().await {
                             handle_block_inhibited(&block_inhibited, &event_sender).await;
                         }
