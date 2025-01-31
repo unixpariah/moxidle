@@ -1,10 +1,6 @@
 use mlua::{Lua, LuaSerdeExt};
 use serde::Deserialize;
-use std::{
-    fs,
-    path::PathBuf,
-    sync::{atomic::AtomicBool, Arc},
-};
+use std::{fs, path::PathBuf, sync::Arc};
 
 #[derive(Deserialize)]
 pub struct FullConfig {
@@ -13,12 +9,12 @@ pub struct FullConfig {
 }
 
 impl FullConfig {
-    pub fn load() -> Result<(Self, PathBuf), Box<dyn std::error::Error>> {
+    pub fn load() -> Result<Self, Box<dyn std::error::Error>> {
         let config_path = Self::config_path()?;
         let lua_code = fs::read_to_string(&config_path)?;
         let lua = Lua::new();
         let lua_result = lua.load(&lua_code).eval()?;
-        Ok((lua.from_value(lua_result)?, config_path))
+        Ok(lua.from_value(lua_result)?)
     }
 
     pub fn split_into_parts(self) -> (MoxidleConfig, Vec<TimeoutConfig>) {
@@ -41,11 +37,11 @@ pub struct MoxidleConfig {
     pub before_sleep_cmd: Option<Arc<str>>,
     pub after_sleep_cmd: Option<Arc<str>>,
     #[serde(default)]
-    pub ignore_systemd_inhibit: Arc<AtomicBool>,
+    pub ignore_systemd_inhibit: bool,
     #[serde(default)]
-    pub ignore_audio_inhibit: Arc<AtomicBool>,
+    pub ignore_audio_inhibit: bool,
     #[serde(default)]
-    pub ignore_dbus_inhibit: Arc<AtomicBool>,
+    pub ignore_dbus_inhibit: bool,
 }
 
 #[derive(Deserialize)]

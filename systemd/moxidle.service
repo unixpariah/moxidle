@@ -1,0 +1,13 @@
+[Unit]
+Description=moxidle daemon
+PartOf=graphical-session.target
+After=graphical-session.target
+ConditionEnvironment=WAYLAND_DISPLAY
+
+[Service]
+Type=simple
+ExecStart=@CARGO_INSTALL_ROOT@/bin/hypridle
+Restart=on-failure
+
+[Install]
+WantedBy=graphical-session.target

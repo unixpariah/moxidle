@@ -1,8 +1,3 @@
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc,
-};
-
 use crate::Event;
 use calloop::channel;
 use futures_lite::StreamExt;
@@ -42,7 +37,7 @@ async fn handle_block_inhibited(value: &str, sender: &channel::Sender<Event>) {
 
 pub async fn serve(
     event_sender: channel::Sender<Event>,
-    ignore_systemd_inhibit: Arc<AtomicBool>,
+    ignore_systemd_inhibit: bool,
 ) -> zbus::Result<()> {
     let system_conn = zbus::Connection::system().await?;
     let login_manager = LoginManagerProxy::new(&system_conn).await?;
@@ -60,7 +55,7 @@ pub async fn serve(
         }
     };
 
-    if !ignore_systemd_inhibit.load(Ordering::SeqCst) {
+    if !ignore_systemd_inhibit {
         if let Ok(block_inhibited) = login_manager.block_inhibited().await {
             handle_block_inhibited(&block_inhibited, &event_sender).await;
         }

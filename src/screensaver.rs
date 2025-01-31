@@ -2,7 +2,7 @@ use crate::Event;
 use calloop::channel;
 use futures_lite::StreamExt;
 use std::sync::{
-    atomic::{AtomicBool, AtomicU32, Ordering},
+    atomic::{AtomicU32, Ordering},
     Arc,
 };
 use tokio::sync::Mutex;
@@ -81,9 +81,9 @@ impl Screensaver {
 
 pub async fn serve(
     event_sender: channel::Sender<Event>,
-    ignore_dbus_inhibit: Arc<AtomicBool>,
+    ignore_dbus_inhibit: bool,
 ) -> zbus::Result<()> {
-    if ignore_dbus_inhibit.load(Ordering::SeqCst) {
+    if ignore_dbus_inhibit {
         return Ok(());
     }
 

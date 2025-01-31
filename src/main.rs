@@ -2,11 +2,10 @@ mod config;
 mod login;
 mod screensaver;
 
-use calloop::{channel, generic::Generic, EventLoop, Interest, Mode};
+use calloop::{channel, EventLoop};
 use calloop_wayland_source::WaylandSource;
 use config::{FullConfig, MoxidleConfig, TimeoutConfig};
-use inotify::{Inotify, WatchMask};
-use std::{error::Error, ops::Deref, os::fd::AsRawFd, process::Command, sync::Arc};
+use std::{error::Error, ops::Deref, process::Command, sync::Arc};
 use wayland_client::{
     delegate_noop,
     globals::{registry_queue_init, GlobalList, GlobalListContents},
@@ -55,7 +54,6 @@ struct Moxidle {
     config: MoxidleConfig,
     inhibited: bool,
     qh: QueueHandle<Self>,
-    inotify: Inotify,
 }
 
 impl Deref for Moxidle {
@@ -75,22 +73,14 @@ impl Moxidle {
         let seat = globals.bind::<wl_seat::WlSeat, _, _>(&qh, 1..=4, ())?;
         seat.get_pointer(&qh, ());
 
-        let (config, config_path) = FullConfig::load()?;
-        let (general_config, timeout_configs) = config.split_into_parts();
+        let (general_config, timeout_configs) = FullConfig::load()?.split_into_parts();
 
         let timeouts = timeout_configs
             .into_iter()
             .map(|cfg| TimeoutHandler::new(cfg, &qh, &seat, &notifier))
             .collect();
 
-        let inotify = Inotify::init()?;
-        inotify.watches().add(
-            config_path.parent().unwrap(),
-            WatchMask::MODIFY | WatchMask::CREATE | WatchMask::DELETE,
-        )?;
-
         Ok(Self {
-            inotify,
             timeouts,
             config: general_config,
             notifier,
@@ -151,20 +141,6 @@ impl Moxidle {
                 (),
             );
         });
-    }
-
-    fn reload_config(&mut self) -> Result<()> {
-        let (new_config, _) = FullConfig::load()?;
-        let (general_config, timeout_configs) = new_config.split_into_parts();
-
-        self.config = general_config;
-        self.timeouts = timeout_configs
-            .into_iter()
-            .map(|cfg| TimeoutHandler::new(cfg, &self.qh, &self.seat, &self.notifier))
-            .collect();
-
-        log::info!("Configuration reloaded successfully");
-        Ok(())
     }
 }
 
@@ -273,26 +249,6 @@ async fn main() -> Result<()> {
     WaylandSource::new(conn, event_queue)
         .insert(event_loop.handle())
         .map_err(|e| format!("Failed to insert Wayland source: {}", e))?;
-
-    let inotify_source = Generic::new(
-        unsafe { calloop::generic::FdWrapper::new(moxidle.inotify.as_raw_fd()) },
-        Interest::READ,
-        Mode::Level,
-    );
-    event_loop
-        .handle()
-        .insert_source(inotify_source, |_, _, state| {
-            let mut buffer = [0; 4096];
-            if let Err(e) = state.inotify.read_events(&mut buffer) {
-                log::error!("Inotify read error: {}", e);
-                return Ok(calloop::PostAction::Continue);
-            }
-
-            if let Err(e) = state.reload_config() {
-                log::error!("Config reload failed: {}", e);
-            }
-            Ok(calloop::PostAction::Continue)
-        })?;
 
     let (executor, scheduler) = calloop::futures::executor()?;
     let (event_sender, event_receiver) = channel::channel();
