@@ -1,6 +1,7 @@
 {
   pkg-config,
   lua5_4,
+  libpulseaudio,
   lib,
   rustPlatform,
 }:
@@ -28,9 +29,10 @@ rustPlatform.buildRustPackage {
 
   buildInputs = [
     lua5_4
+    libpulseaudio
   ];
 
   configurePhase = ''
-    export PKG_CONFIG_PATH=${lua5_4}/lib/pkgconfig
+    export PKG_CONFIG_PATH=${lua5_4}/lib/pkgconfig:${libpulseaudio}/lib/pkgconfig
   '';
 }

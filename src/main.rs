@@ -1,3 +1,4 @@
+mod audio;
 mod config;
 mod login;
 mod screensaver;
@@ -109,6 +110,10 @@ impl Moxidle {
                     log::info!("systemd idle inhibit inactive");
                 }
             }
+            Event::AudioInhibit(inhibited) => {
+                self.inhibited = inhibited;
+                self.reset_idle_timers();
+            }
             Event::SessionLocked(locked) => {
                 if locked {
                     if let Some(lock_cmd) = self.lock_cmd.as_ref() {
@@ -155,6 +160,7 @@ enum Event {
     SessionLocked(bool),
     BlockInhibited(String),
     PrepareForSleep(bool),
+    AudioInhibit(bool),
 }
 
 fn execute_command(command: Arc<str>) {
@@ -274,6 +280,16 @@ async fn main() -> Result<()> {
         scheduler.schedule(async move {
             if let Err(e) = login::serve(event_sender, ignore_systemd_inhibit).await {
                 log::error!("D-Bus login manager error: {}", e);
+            }
+        })?;
+    }
+
+    {
+        let ignore_audio_inhibit = moxidle.ignore_audio_inhibit;
+        let event_sender = event_sender.clone();
+        scheduler.schedule(async move {
+            if let Err(e) = audio::serve(event_sender, ignore_audio_inhibit).await {
+                log::error!("Audio error: {}", e);
             }
         })?;
     }

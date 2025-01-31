@@ -35,8 +35,12 @@
               nixd
               pkg-config
               lua5_4
-              prettierd
+              libpulseaudio
             ];
+
+            shellHook = ''
+              export LD_LIBRARY_PATH=${pkgs.libpulseaudio}/lib:$LD_LIBRARY_PATH
+            '';
           };
 
       });

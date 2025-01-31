@@ -43,6 +43,7 @@ You can define multiple timeout rules. If `on_timeout` or `on_resume` is omitted
 
 - Wayland
 - Lua 5.4
+- libpulseaudio (optional if disabling default features)
 - Rust (for building)
 
 ## Building
@@ -50,6 +51,18 @@ You can define multiple timeout rules. If `on_timeout` or `on_resume` is omitted
 ```sh
 cargo build --release
 ```
+
+If you wish to disable dbus/systemd/audio integration use
+
+```sh
+cargo build --no-default-features
+```
+
+### Feature flags
+
+- dbus - Enables dbus integration
+- systemd - Enables Systemd integration (enables dbus)
+- audio - Enables audio integration
 
 ## Installation
 

@@ -15,3 +15,11 @@ wayland-protocols = { version = "0.32.5", features = [ "staging", "client" ] }
 futures-lite = "2.6.0"
 zbus = "5.3.1"
 tokio = { version = "1.43.0", features = ["fs", "macros", "rt", "rt-multi-thread", "sync", "tokio-macros"] }
+libpulse-binding = "2.28.2"
+
+[features]
+default = [ "dbus", "systemd", "audio" ]
+dbus = []
+systemd = [ "dbus" ]
+audio = []
+
