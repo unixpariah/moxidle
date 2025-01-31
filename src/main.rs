@@ -25,6 +25,14 @@ struct TimeoutHandler {
     notification: ext_idle_notification_v1::ExtIdleNotificationV1,
 }
 
+impl Deref for TimeoutHandler {
+    type Target = TimeoutConfig;
+
+    fn deref(&self) -> &Self::Target {
+        &self.config
+    }
+}
+
 impl TimeoutHandler {
     fn new(
         config: TimeoutConfig,
@@ -96,7 +104,10 @@ impl Moxidle {
 
     fn handle_app_event(&mut self, event: Event) {
         match event {
-            Event::OnBattery(on_battery) => self.on_battery = on_battery,
+            Event::OnBattery(on_battery) => {
+                self.on_battery = on_battery;
+                self.reset_idle_timers();
+            }
             Event::ScreensaverInhibit(inhibited) => {
                 self.inhibited = inhibited;
                 self.reset_idle_timers();
@@ -147,12 +158,37 @@ impl Moxidle {
         if !self.inhibited {
             log::debug!("Resetting idle timers");
             self.timeouts.iter_mut().for_each(|handler| {
-                handler.notification = self.notifier.get_idle_notification(
-                    handler.config.timeout_millis(),
-                    &self.seat,
-                    &self.qh,
-                    (),
-                );
+                if let Some(condition) = handler.condition.as_ref() {
+                    match condition {
+                        config::Condition::OnBattery => {
+                            if self.on_battery {
+                                handler.notification = self.notifier.get_idle_notification(
+                                    handler.config.timeout_millis(),
+                                    &self.seat,
+                                    &self.qh,
+                                    (),
+                                );
+                            }
+                        }
+                        config::Condition::OnAc => {
+                            if !self.on_battery {
+                                handler.notification = self.notifier.get_idle_notification(
+                                    handler.config.timeout_millis(),
+                                    &self.seat,
+                                    &self.qh,
+                                    (),
+                                );
+                            }
+                        }
+                    }
+                } else {
+                    handler.notification = self.notifier.get_idle_notification(
+                        handler.config.timeout_millis(),
+                        &self.seat,
+                        &self.qh,
+                        (),
+                    );
+                }
             });
         }
     }

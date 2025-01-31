@@ -29,6 +29,7 @@ return {
   },
   timeouts = {
     {
+      condition = "on_battery" -- Condition needed to be fullfilled for timeout to run
       timeout = 300, -- Idle timeout in seconds
       on_timeout = "pidof hyprlock || hyprlock", -- Command executed on timeout
       on_resume = "notify-send 'Welcome back!'", -- Command executed on user activity
