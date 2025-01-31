@@ -35,6 +35,7 @@
               nixd
               pkg-config
               lua5_4
+              prettierd
             ];
           };
 

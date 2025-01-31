@@ -5,7 +5,7 @@ use calloop::{channel, generic::Generic, EventLoop, Interest, Mode};
 use calloop_wayland_source::WaylandSource;
 use config::{FullConfig, MoxidleConfig, TimeoutConfig};
 use inotify::{Inotify, WatchMask};
-use std::{error::Error, os::fd::AsRawFd, process::Command, sync::Arc};
+use std::{error::Error, ops::Deref, os::fd::AsRawFd, process::Command, sync::Arc};
 use wayland_client::{
     delegate_noop,
     globals::{registry_queue_init, GlobalList, GlobalListContents},
@@ -51,10 +51,18 @@ struct Moxidle {
     seat: wl_seat::WlSeat,
     notifier: ext_idle_notifier_v1::ExtIdleNotifierV1,
     timeouts: Vec<TimeoutHandler>,
-    config: Arc<MoxidleConfig>,
+    config: MoxidleConfig,
     inhibited: bool,
     qh: QueueHandle<Self>,
     inotify: Inotify,
+}
+
+impl Deref for Moxidle {
+    type Target = MoxidleConfig;
+
+    fn deref(&self) -> &Self::Target {
+        &self.config
+    }
 }
 
 impl Moxidle {
@@ -83,7 +91,7 @@ impl Moxidle {
         Ok(Self {
             inotify,
             timeouts,
-            config: Arc::new(general_config),
+            config: general_config,
             notifier,
             seat,
             inhibited: false,
@@ -92,6 +100,7 @@ impl Moxidle {
     }
 
     fn handle_app_event(&mut self, event: Event) {
+        println!("{:?}", event);
         match event {
             Event::ScreensaverInhibit(inhibited) => {
                 self.inhibited = inhibited;
@@ -99,6 +108,19 @@ impl Moxidle {
                     self.reset_idle_timers();
                 }
             }
+            Event::SessionLocked(locked) => match locked {
+                true => {
+                    if let Some(lock_cmd) = self.config.lock_cmd.as_ref() {
+                        execute_command(lock_cmd.clone())
+                    }
+                }
+                false => {
+                    if let Some(unlock_cmd) = self.config.unlock_cmd.as_ref() {
+                        execute_command(unlock_cmd.clone())
+                    }
+                }
+            },
+            Event::BlockInhibited(ihibition) => {}
         }
     }
 
@@ -117,7 +139,7 @@ impl Moxidle {
         let (new_config, _) = FullConfig::load()?;
         let (general_config, timeout_configs) = new_config.split_into_parts();
 
-        self.config = Arc::new(general_config);
+        self.config = general_config;
         self.timeouts = timeout_configs
             .into_iter()
             .map(|cfg| TimeoutHandler::new(cfg, &self.qh, &self.seat, &self.notifier))
@@ -131,6 +153,8 @@ impl Moxidle {
 #[derive(Debug)]
 enum Event {
     ScreensaverInhibit(bool),
+    SessionLocked(bool),
+    BlockInhibited(String),
 }
 
 fn execute_command(command: Arc<str>) {
@@ -153,19 +177,6 @@ fn execute_command(command: Arc<str>) {
         }
         Err(err) => log::error!("failed to wait on command '{}': {}", command, err),
     });
-}
-
-// Wayland event implementations
-impl Dispatch<wl_pointer::WlPointer, ()> for Moxidle {
-    fn event(
-        _: &mut Self,
-        _: &wl_pointer::WlPointer,
-        _: wl_pointer::Event,
-        _: &(),
-        _: &Connection,
-        _: &QueueHandle<Self>,
-    ) {
-    }
 }
 
 impl Dispatch<ext_idle_notification_v1::ExtIdleNotificationV1, ()> for Moxidle {
@@ -220,10 +231,22 @@ impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for Moxidle {
     }
 }
 
+delegate_noop!(Moxidle: wl_pointer::WlPointer);
 delegate_noop!(Moxidle: ext_idle_notifier_v1::ExtIdleNotifierV1);
 delegate_noop!(Moxidle: ignore wl_seat::WlSeat);
 
-fn main() -> Result<()> {
+//async fn receive_battery_task(sender: EventSender) -> zbus::Result<()> {
+//    let connection = zbus::Connection::system().await?;
+//    let upower = UPowerProxy::new(&connection).await?;
+//    let mut stream = upower.receive_on_battery_changed().await;
+//    while let Some(event) = stream.next().await {
+//        let _ = sender.send(Event::OnBattery(event.get().await?));
+//    }
+//    Ok(())
+//}
+
+#[tokio::main]
+async fn main() -> Result<()> {
     env_logger::init();
 
     let conn = Connection::connect_to_env()?;
@@ -257,25 +280,23 @@ fn main() -> Result<()> {
             Ok(calloop::PostAction::Continue)
         })?;
 
-    if !moxidle.config.ignore_dbus_inhibit {
-        let (executor, scheduler) = calloop::futures::executor()?;
-        let (event_sender, event_receiver) = channel::channel();
+    let (executor, scheduler) = calloop::futures::executor()?;
+    let (event_sender, event_receiver) = channel::channel();
 
-        scheduler.schedule(async move {
-            if let Err(e) = screensaver::serve(event_sender).await {
-                log::error!("D-Bus error: {}", e);
+    scheduler.schedule(async move {
+        if let Err(e) = screensaver::serve(event_sender).await {
+            log::error!("D-Bus error: {}", e);
+        }
+    })?;
+
+    event_loop.handle().insert_source(executor, |_, _, _| ())?;
+    event_loop
+        .handle()
+        .insert_source(event_receiver, |event, _, state| {
+            if let channel::Event::Msg(event) = event {
+                state.handle_app_event(event);
             }
         })?;
-
-        event_loop.handle().insert_source(executor, |_, _, _| ())?;
-        event_loop
-            .handle()
-            .insert_source(event_receiver, |event, _, state| {
-                if let channel::Event::Msg(event) = event {
-                    state.handle_app_event(event);
-                }
-            })?;
-    }
 
     event_loop.run(None, &mut moxidle, |_| {})?;
     Ok(())
