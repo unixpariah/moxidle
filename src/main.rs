@@ -84,7 +84,7 @@ impl Deref for Moxidle {
 }
 
 impl Moxidle {
-    fn init(
+    fn new(
         globals: GlobalList,
         qh: QueueHandle<Self>,
         config_path: Option<PathBuf>,
@@ -349,11 +349,9 @@ async fn main() -> Result<()> {
     let qh = event_queue.handle();
 
     let mut event_loop = EventLoop::try_new()?;
-    let mut moxidle = Moxidle::init(globals, qh.clone(), cli.config)?;
+    let mut moxidle = Moxidle::new(globals, qh, cli.config)?;
 
-    WaylandSource::new(conn, event_queue)
-        .insert(event_loop.handle())
-        .map_err(|e| format!("Failed to insert Wayland source: {}", e))?;
+    WaylandSource::new(conn, event_queue).insert(event_loop.handle())?;
 
     let (executor, scheduler) = calloop::futures::executor()?;
     let (event_sender, event_receiver) = channel::channel();

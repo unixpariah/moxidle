@@ -48,6 +48,7 @@ You can define multiple timeout rules. If `on_timeout` or `on_resume` is omitted
 
 ## Runtime dependencies
 
+- wayland
 - dbus (Optional if disabling default features)
 - upower (Optional)
 
