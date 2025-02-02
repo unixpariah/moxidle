@@ -55,18 +55,23 @@ pub struct MoxidleConfig {
     pub ignore_audio_inhibit: bool,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum Condition {
     #[cfg(feature = "upower")]
     OnBattery,
     #[cfg(feature = "upower")]
     OnAc,
+    #[cfg(feature = "upower")]
+    BatteryBelow(f64),
+    #[cfg(feature = "upower")]
+    BatteryAbove(f64),
 }
 
 #[derive(Deserialize)]
 pub struct TimeoutConfig {
-    pub condition: Option<Condition>,
+    #[serde(default)]
+    pub conditions: Vec<Condition>,
     pub timeout: u32,
     pub on_timeout: Option<Arc<str>>,
     pub on_resume: Option<Arc<str>>,

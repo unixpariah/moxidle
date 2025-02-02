@@ -40,6 +40,7 @@ pub async fn serve(
     ignore_systemd_inhibit: bool,
 ) -> zbus::Result<()> {
     let system_conn = zbus::Connection::system().await?;
+
     let login_manager = LoginManagerProxy::new(&system_conn).await?;
     let session_path = login_manager.get_session("auto").await?;
 
@@ -55,6 +56,13 @@ pub async fn serve(
         }
     };
 
+    let (mut block_inhibited_stream, mut lock_stream, mut unlock_stream, mut sleep_stream) = tokio::try_join!(
+        async { Ok(login_manager.receive_block_inhibited_changed().await) },
+        login_session.receive_lock(),
+        login_session.receive_unlock(),
+        login_manager.receive_prepare_for_sleep()
+    )?;
+
     if !ignore_systemd_inhibit {
         if let Ok(block_inhibited) = login_manager.block_inhibited().await {
             handle_block_inhibited(&block_inhibited, &event_sender).await;
@@ -62,10 +70,8 @@ pub async fn serve(
 
         {
             let event_sender = event_sender.clone();
-            let login_manager = login_manager.clone();
             tokio::spawn(async move {
-                let mut stream = login_manager.receive_block_inhibited_changed().await;
-                while let Some(change) = stream.next().await {
+                while let Some(change) = block_inhibited_stream.next().await {
                     if change.name() == "BlockInhibited" {
                         if let Ok(block_inhibited) = change.get().await {
                             handle_block_inhibited(&block_inhibited, &event_sender).await;
@@ -78,7 +84,6 @@ pub async fn serve(
 
     {
         let event_sender = event_sender.clone();
-        let mut lock_stream = login_session.receive_lock().await?;
         tokio::spawn(async move {
             while lock_stream.next().await.is_some() {
                 log::info!("Session lock requested");
@@ -91,7 +96,6 @@ pub async fn serve(
 
     {
         let event_sender = event_sender.clone();
-        let mut unlock_stream = login_session.receive_unlock().await?;
         tokio::spawn(async move {
             while unlock_stream.next().await.is_some() {
                 log::info!("Session unlock requested");
@@ -104,11 +108,9 @@ pub async fn serve(
 
     {
         let event_sender = event_sender.clone();
-        let mut sleep_stream = login_manager.receive_prepare_for_sleep().await?;
         tokio::spawn(async move {
             while let Some(sleep) = sleep_stream.next().await {
                 if let Ok(sleep) = sleep.args() {
-                    log::info!("Prepare for sleep: {:?}", sleep.start());
                     if let Err(e) = event_sender.send(Event::PrepareForSleep(*sleep.start())) {
                         log::info!("Failed to get sleep args: {}", e)
                     }

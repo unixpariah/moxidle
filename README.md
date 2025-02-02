@@ -29,10 +29,16 @@ return {
   },
   timeouts = {
     {
-      condition = "on_battery", -- Condition needed to be fullfilled for timeout to run
+      conditions = { "on_battery", { ["battery_below"] = 20 } }, -- Conditions needed to be fullfilled for timeout to launch
       timeout = 300, -- Idle timeout in seconds
-      on_timeout = "pidof hyprlock || hyprlock", -- Command executed on timeout
+      on_timeout = "systemctl suspend", -- Command executed on timeout
       on_resume = "notify-send 'Welcome back!'", -- Command executed on user activity
+    },
+    {
+      conditions = { "on_ac" },
+      timeout = 300,
+      on_timeout = "pidof hyprlock || hyprlock",
+      on_resume = "notify-send 'Welcome back!'",
     },
   },
 }

@@ -11,10 +11,12 @@ mod upower;
 use calloop::{channel, EventLoop};
 use calloop_wayland_source::WaylandSource;
 use clap::Parser;
-use config::{FullConfig, MoxidleConfig, TimeoutConfig};
+use config::{Condition, FullConfig, MoxidleConfig, TimeoutConfig};
 use env_logger::Builder;
 use log::LevelFilter;
 use std::{error::Error, ops::Deref, path::PathBuf, process::Command, sync::Arc};
+#[cfg(feature = "upower")]
+use upower::Power;
 use wayland_client::{
     delegate_noop,
     globals::{registry_queue_init, GlobalList, GlobalListContents},
@@ -72,7 +74,7 @@ struct Moxidle {
     inhibited: bool,
     qh: QueueHandle<Self>,
     #[cfg(feature = "upower")]
-    on_battery: bool,
+    power: Power,
 }
 
 impl Deref for Moxidle {
@@ -105,7 +107,7 @@ impl Moxidle {
 
         Ok(Self {
             #[cfg(feature = "upower")]
-            on_battery: false,
+            power: Power::default(),
             timeouts,
             config: general_config,
             notifier,
@@ -119,7 +121,12 @@ impl Moxidle {
         match event {
             #[cfg(feature = "upower")]
             Event::OnBattery(on_battery) => {
-                self.on_battery = on_battery;
+                self.power.unplugged = on_battery;
+                self.reset_idle_timers();
+            }
+            #[cfg(feature = "upower")]
+            Event::BatteryPercentage(battery) => {
+                self.power.percentage = battery;
                 self.reset_idle_timers();
             }
             #[cfg(feature = "dbus")]
@@ -177,31 +184,20 @@ impl Moxidle {
         if !self.inhibited {
             log::debug!("Resetting idle timers");
             self.timeouts.iter_mut().for_each(|handler| {
-                if let Some(condition) = handler.condition.as_ref() {
+                let should_notify = handler.conditions.iter().all(|condition| {
                     #[cfg(feature = "upower")]
                     match condition {
-                        config::Condition::OnBattery => {
-                            if self.on_battery {
-                                handler.notification = self.notifier.get_idle_notification(
-                                    handler.config.timeout_millis(),
-                                    &self.seat,
-                                    &self.qh,
-                                    (),
-                                );
-                            }
-                        }
-                        config::Condition::OnAc => {
-                            if !self.on_battery {
-                                handler.notification = self.notifier.get_idle_notification(
-                                    handler.config.timeout_millis(),
-                                    &self.seat,
-                                    &self.qh,
-                                    (),
-                                );
-                            }
-                        }
+                        Condition::OnBattery => self.power.unplugged,
+                        Condition::OnAc => !self.power.unplugged,
+                        Condition::BatteryBelow(battery) => self.power.percentage.lt(battery),
+                        Condition::BatteryAbove(battery) => self.power.percentage.gt(battery),
                     }
-                } else {
+                    #[cfg(not(feature = "upower"))] // This is temporary until there are conditions
+                    // not related to upower
+                    true
+                });
+
+                if should_notify {
                     handler.notification = self.notifier.get_idle_notification(
                         handler.config.timeout_millis(),
                         &self.seat,
@@ -218,6 +214,8 @@ impl Moxidle {
 enum Event {
     #[cfg(feature = "upower")]
     OnBattery(bool),
+    #[cfg(feature = "upower")]
+    BatteryPercentage(f64),
     #[cfg(feature = "dbus")]
     ScreensaverInhibit(bool),
     #[cfg(feature = "systemd")]
@@ -358,9 +356,28 @@ async fn main() -> Result<()> {
 
     #[cfg(feature = "upower")]
     {
+        let ignore_on_battery = !moxidle.timeouts.iter().any(|timeout| {
+            timeout
+                .config
+                .conditions
+                .iter()
+                .any(|condition| *condition == Condition::OnBattery)
+        });
+
+        let ignore_battery_percentage = !moxidle.timeouts.iter().any(|timeout| {
+            timeout.config.conditions.iter().any(|condition| {
+                matches!(
+                    condition,
+                    Condition::BatteryBelow(_) | Condition::BatteryAbove(_)
+                )
+            })
+        });
+
         let event_sender = event_sender.clone();
         scheduler.schedule(async move {
-            if let Err(e) = upower::serve(event_sender).await {
+            if let Err(e) =
+                upower::serve(event_sender, ignore_on_battery, ignore_battery_percentage).await
+            {
                 log::error!("D-Bus upower error: {}", e);
             }
         })?;
