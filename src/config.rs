@@ -1,31 +1,32 @@
 use mlua::{Lua, LuaSerdeExt};
 use serde::Deserialize;
-use std::{fs, path::PathBuf, sync::Arc};
+use std::{fs, path::PathBuf, rc::Rc, sync::Arc};
 
 #[derive(Deserialize)]
-pub struct FullConfig {
+pub struct Config {
     pub general: MoxidleConfig,
     pub timeouts: Vec<TimeoutConfig>,
 }
 
-impl FullConfig {
-    pub fn load(path: Option<PathBuf>) -> Result<Self, Box<dyn std::error::Error>> {
+impl Config {
+    pub fn load(
+        path: Option<PathBuf>,
+    ) -> Result<(MoxidleConfig, Vec<TimeoutConfig>), Box<dyn std::error::Error>> {
         let config_path = if let Some(path) = path {
             path
         } else {
-            Self::config_path()?
+            Self::path()?
         };
         let lua_code = fs::read_to_string(&config_path)?;
         let lua = Lua::new();
         let lua_result = lua.load(&lua_code).eval()?;
-        Ok(lua.from_value(lua_result)?)
+
+        let config: Config = lua.from_value(lua_result)?;
+
+        Ok((config.general, config.timeouts))
     }
 
-    pub fn split_into_parts(self) -> (MoxidleConfig, Vec<TimeoutConfig>) {
-        (self.general, self.timeouts)
-    }
-
-    pub fn config_path() -> Result<PathBuf, Box<dyn std::error::Error>> {
+    pub fn path() -> Result<PathBuf, Box<dyn std::error::Error>> {
         let config_dir = std::env::var("XDG_CONFIG_HOME")
             .map(PathBuf::from)
             .or_else(|_| std::env::var("HOME").map(|home| PathBuf::from(home).join(".config")))?;
@@ -71,7 +72,7 @@ pub enum Condition {
 #[derive(Deserialize)]
 pub struct TimeoutConfig {
     #[serde(default)]
-    pub conditions: Vec<Condition>,
+    pub conditions: Rc<[Condition]>,
     pub timeout: u32,
     pub on_timeout: Option<Arc<str>>,
     pub on_resume: Option<Arc<str>>,

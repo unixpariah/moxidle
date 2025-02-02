@@ -11,7 +11,7 @@ mod upower;
 use calloop::{channel, EventLoop};
 use calloop_wayland_source::WaylandSource;
 use clap::Parser;
-use config::{Condition, FullConfig, MoxidleConfig, TimeoutConfig};
+use config::{Condition, Config, MoxidleConfig, TimeoutConfig};
 use env_logger::Builder;
 use log::LevelFilter;
 use std::{error::Error, ops::Deref, path::PathBuf, process::Command, sync::Arc};
@@ -98,7 +98,7 @@ impl Moxidle {
         let seat = globals.bind::<wl_seat::WlSeat, _, _>(&qh, 1..=4, ())?;
         seat.get_pointer(&qh, ());
 
-        let (general_config, timeout_configs) = FullConfig::load(config_path)?.split_into_parts();
+        let (general_config, timeout_configs) = Config::load(config_path)?;
 
         let timeouts = timeout_configs
             .into_iter()
