@@ -31,7 +31,7 @@ type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
 struct TimeoutHandler {
     config: TimeoutConfig,
-    notification: ext_idle_notification_v1::ExtIdleNotificationV1,
+    notification: Option<ext_idle_notification_v1::ExtIdleNotificationV1>,
 }
 
 impl Deref for TimeoutHandler {
@@ -53,7 +53,7 @@ impl TimeoutHandler {
 
         Self {
             config,
-            notification,
+            notification: Some(notification),
         }
     }
 
@@ -178,7 +178,10 @@ impl Moxidle {
 
     fn reset_idle_timers(&mut self) {
         self.timeouts.iter_mut().for_each(|handler| {
-            handler.notification.destroy();
+            if let Some(notification) = handler.notification.as_ref() {
+                notification.destroy();
+                handler.notification = None;
+            }
         });
 
         if !self.inhibited {
@@ -198,12 +201,12 @@ impl Moxidle {
                 });
 
                 if should_notify {
-                    handler.notification = self.notifier.get_idle_notification(
+                    handler.notification = Some(self.notifier.get_idle_notification(
                         handler.config.timeout_millis(),
                         &self.seat,
                         &self.qh,
                         (),
-                    );
+                    ));
                 }
             });
         }
@@ -262,7 +265,7 @@ impl Dispatch<ext_idle_notification_v1::ExtIdleNotificationV1, ()> for Moxidle {
         let Some(handler) = state
             .timeouts
             .iter()
-            .find(|h| h.notification == *notification)
+            .find(|timeout| timeout.notification.as_ref() == Some(notification))
         else {
             return;
         };
