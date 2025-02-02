@@ -106,7 +106,7 @@ in
       };
 
       Service = {
-        ExecStart = "${lib.getExe cfg.package}";
+        ExecStart = "${lib.getExe cfg.package} -vv";
         Restart = "on-failure";
         Environment = [
           "PATH=${

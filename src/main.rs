@@ -150,7 +150,6 @@ impl Moxidle {
                 } else {
                     self.inhibited = false;
                     self.reset_idle_timers();
-                    log::info!("systemd idle inhibit inactive");
                 }
             }
             #[cfg(feature = "systemd")]
@@ -178,16 +177,8 @@ impl Moxidle {
 
     fn reset_idle_timers(&mut self) {
         self.timeouts.iter_mut().for_each(|handler| {
-            if let Some(notification) = handler.notification.as_ref() {
-                notification.destroy();
-                handler.notification = None;
-            }
-        });
-
-        if !self.inhibited {
-            log::debug!("Resetting idle timers");
-            self.timeouts.iter_mut().for_each(|handler| {
-                let should_notify = handler.conditions.iter().all(|condition| {
+            let current_met = if !self.inhibited {
+                handler.conditions.iter().all(|condition| {
                     #[cfg(feature = "upower")]
                     match condition {
                         Condition::OnBattery => self.power.unplugged,
@@ -195,21 +186,37 @@ impl Moxidle {
                         Condition::BatteryBelow(battery) => self.power.percentage.lt(battery),
                         Condition::BatteryAbove(battery) => self.power.percentage.gt(battery),
                     }
-                    #[cfg(not(feature = "upower"))] // This is temporary until there are conditions
-                    // not related to upower
+                    #[cfg(not(feature = "upower"))]
                     true
-                });
+                })
+            } else {
+                false
+            };
 
-                if should_notify {
+            if current_met {
+                if handler.notification.is_none() {
                     handler.notification = Some(self.notifier.get_idle_notification(
                         handler.config.timeout_millis(),
                         &self.seat,
                         &self.qh,
                         (),
                     ));
+
+                    log::info!(
+                        "Notification created\ntimeout: {}\ncommand: {:?}",
+                        handler.timeout,
+                        handler.on_timeout
+                    );
                 }
-            });
-        }
+            } else if let Some(notification) = handler.notification.take() {
+                notification.destroy();
+                log::info!(
+                    "Notification destroyed\ntimeout: {}\ncommand: {:?}",
+                    handler.timeout,
+                    handler.on_timeout
+                );
+            }
+        });
     }
 }
 
@@ -323,7 +330,7 @@ async fn main() -> Result<()> {
 
     let mut log_level = LevelFilter::Error;
 
-    (0..cli.quiet).for_each(|_| {
+    (0..cli.verbose).for_each(|_| {
         log_level = match log_level {
             LevelFilter::Error => LevelFilter::Warn,
             LevelFilter::Warn => LevelFilter::Info,

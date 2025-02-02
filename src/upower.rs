@@ -44,6 +44,7 @@ pub async fn serve(
         tokio::spawn(async move {
             while let Some(event) = on_battery_stream.next().await {
                 if let Ok(on_battery) = event.get().await {
+                    log::info!("On battery event sent");
                     if let Err(e) = event_sender.send(Event::OnBattery(on_battery)) {
                         log::info!("Failed to get OnBattery args: {}", e)
                     }
@@ -55,6 +56,7 @@ pub async fn serve(
     if !ignore_battery_percentage {
         let device = upower.get_display_device().await?;
         let percentage = device.percentage().await?;
+        log::info!("Battery percentage event sent");
         if let Err(e) = event_sender.send(Event::BatteryPercentage(percentage)) {
             log::info!("Failed to get OnBattery args: {}", e)
         }
@@ -65,6 +67,7 @@ pub async fn serve(
         tokio::spawn(async move {
             while let Some(event) = percentage_stream.next().await {
                 if let Ok(percentage) = event.get().await {
+                    log::info!("Battery percentage event sent");
                     if let Err(e) = event_sender.send(Event::BatteryPercentage(percentage)) {
                         log::info!("Failed to get BatteryPercentage args: {}", e)
                     }
