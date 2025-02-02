@@ -1,6 +1,7 @@
 use crate::Event;
 use calloop::channel;
 use futures_lite::StreamExt;
+use std::sync::Arc;
 
 #[zbus::proxy(
     interface = "org.freedesktop.login1.Manager",
@@ -36,15 +37,14 @@ async fn handle_block_inhibited(value: &str, sender: &channel::Sender<Event>) {
 }
 
 pub async fn serve(
+    connection: Arc<zbus::Connection>,
     event_sender: channel::Sender<Event>,
     ignore_systemd_inhibit: bool,
 ) -> zbus::Result<()> {
-    let system_conn = zbus::Connection::system().await?;
-
-    let login_manager = LoginManagerProxy::new(&system_conn).await?;
+    let login_manager = LoginManagerProxy::new(&connection).await?;
     let session_path = login_manager.get_session("auto").await?;
 
-    let login_session = match LoginSessionProxy::builder(&system_conn)
+    let login_session = match LoginSessionProxy::builder(&connection)
         .path(session_path)?
         .build()
         .await

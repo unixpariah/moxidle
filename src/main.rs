@@ -354,6 +354,8 @@ async fn main() -> Result<()> {
     let (executor, scheduler) = calloop::futures::executor()?;
     let (event_sender, event_receiver) = channel::channel();
 
+    #[cfg(feature = "dbus")]
+    let dbus_conn = Arc::new(zbus::Connection::system().await?);
     #[cfg(feature = "upower")]
     {
         let ignore_on_battery = !moxidle.timeouts.iter().any(|timeout| {
@@ -374,9 +376,15 @@ async fn main() -> Result<()> {
         });
 
         let event_sender = event_sender.clone();
+        let dbus_conn = Arc::clone(&dbus_conn);
         scheduler.schedule(async move {
-            if let Err(e) =
-                upower::serve(event_sender, ignore_on_battery, ignore_battery_percentage).await
+            if let Err(e) = upower::serve(
+                dbus_conn,
+                event_sender,
+                ignore_on_battery,
+                ignore_battery_percentage,
+            )
+            .await
             {
                 log::error!("D-Bus upower error: {}", e);
             }
@@ -398,8 +406,9 @@ async fn main() -> Result<()> {
     {
         let ignore_systemd_inhibit = moxidle.ignore_systemd_inhibit;
         let event_sender = event_sender.clone();
+        let dbus_conn = Arc::clone(&dbus_conn);
         scheduler.schedule(async move {
-            if let Err(e) = login::serve(event_sender, ignore_systemd_inhibit).await {
+            if let Err(e) = login::serve(dbus_conn, event_sender, ignore_systemd_inhibit).await {
                 log::error!("D-Bus login manager error: {}", e);
             }
         })?;

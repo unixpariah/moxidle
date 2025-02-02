@@ -1,6 +1,7 @@
 use crate::Event;
 use calloop::channel;
 use futures_lite::StreamExt;
+use std::sync::Arc;
 use zbus::proxy;
 
 #[derive(Default)]
@@ -29,12 +30,11 @@ trait Device {
 }
 
 pub async fn serve(
+    connection: Arc<zbus::Connection>,
     event_sender: channel::Sender<Event>,
     ignore_on_battery: bool,
     ignore_battery_percentage: bool,
 ) -> zbus::Result<()> {
-    let connection = zbus::Connection::system().await?;
-
     let upower = UPowerProxy::new(&connection).await?;
 
     let mut on_battery_stream = upower.receive_on_battery_changed().await;
