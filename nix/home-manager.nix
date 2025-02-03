@@ -96,18 +96,22 @@ in
     };
 
     systemd.user.services.moxidle = {
-      Install.WantedBy = [ "graphical-session.target" ];
+      Install = {
+        WantedBy = [ config.wayland.systemd.target ];
+      };
 
       Unit = {
         Description = "moxidle idle manager";
-        PartOf = [ "graphical-session.target" ];
+        PartOf = [ config.wayland.systemd.target ];
+        After = [ config.wayland.systemd.target ];
         ConditionEnvironment = "WAYLAND_DISPLAY";
         X-Restart-Triggers = [ config.xdg.configFile."moxidle/config.lua".source ];
       };
 
       Service = {
         ExecStart = "${lib.getExe cfg.package} -vv";
-        Restart = "on-failure";
+        Restart = "always";
+        RestartSec = "10";
         Environment = [
           "PATH=${
             lib.makeBinPath (
