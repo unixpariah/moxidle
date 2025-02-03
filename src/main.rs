@@ -43,17 +43,10 @@ impl Deref for TimeoutHandler {
 }
 
 impl TimeoutHandler {
-    fn new(
-        config: TimeoutConfig,
-        qh: &QueueHandle<Moxidle>,
-        seat: &wl_seat::WlSeat,
-        notifier: &ext_idle_notifier_v1::ExtIdleNotifierV1,
-    ) -> Self {
-        let notification = notifier.get_idle_notification(config.timeout_millis(), seat, qh, ());
-
+    fn new(config: TimeoutConfig) -> Self {
         Self {
             config,
-            notification: Some(notification),
+            notification: None,
         }
     }
 
@@ -66,12 +59,43 @@ impl TimeoutHandler {
     }
 }
 
+#[derive(Default)]
+struct Inhibitors {
+    #[cfg(feature = "audio")]
+    audio_inhibitor: bool,
+    #[cfg(feature = "dbus")]
+    dbus_inhibitor: bool,
+    #[cfg(feature = "systemd")]
+    systemd_inhibitor: bool,
+}
+
+impl Inhibitors {
+    fn active(&self) -> bool {
+        #[allow(unused_mut)]
+        let mut active = false;
+        #[cfg(feature = "dbus")]
+        {
+            active |= self.dbus_inhibitor;
+        }
+        #[cfg(feature = "audio")]
+        {
+            active |= self.audio_inhibitor;
+        }
+        #[cfg(feature = "systemd")]
+        {
+            active |= self.systemd_inhibitor;
+        }
+
+        active
+    }
+}
+
 struct Moxidle {
     seat: wl_seat::WlSeat,
     notifier: ext_idle_notifier_v1::ExtIdleNotifierV1,
     timeouts: Vec<TimeoutHandler>,
     config: MoxidleConfig,
-    inhibited: bool,
+    inhibitors: Inhibitors,
     qh: QueueHandle<Self>,
     #[cfg(feature = "upower")]
     power: Power,
@@ -102,7 +126,7 @@ impl Moxidle {
 
         let timeouts = timeout_configs
             .into_iter()
-            .map(|cfg| TimeoutHandler::new(cfg, &qh, &seat, &notifier))
+            .map(TimeoutHandler::new)
             .collect();
 
         Ok(Self {
@@ -112,7 +136,7 @@ impl Moxidle {
             config: general_config,
             notifier,
             seat,
-            inhibited: false,
+            inhibitors: Inhibitors::default(),
             qh,
         })
     }
@@ -131,24 +155,21 @@ impl Moxidle {
             }
             #[cfg(feature = "dbus")]
             Event::ScreensaverInhibit(inhibited) => {
-                self.inhibited = inhibited;
+                self.inhibitors.dbus_inhibitor = inhibited;
                 self.reset_idle_timers();
             }
             #[cfg(feature = "audio")]
             Event::AudioInhibit(inhibited) => {
-                self.inhibited = inhibited;
+                self.inhibitors.audio_inhibitor = inhibited;
                 self.reset_idle_timers();
             }
             #[cfg(feature = "systemd")]
             Event::BlockInhibited(inhibition) => {
                 if inhibition.contains("idle") {
-                    if !self.inhibited {
-                        self.inhibited = true;
-                        log::info!("systemd idle inhibit active");
-                    }
+                    self.inhibitors.dbus_inhibitor = true;
                     self.reset_idle_timers();
                 } else {
-                    self.inhibited = false;
+                    self.inhibitors.dbus_inhibitor = false;
                     self.reset_idle_timers();
                 }
             }
@@ -177,7 +198,7 @@ impl Moxidle {
 
     fn reset_idle_timers(&mut self) {
         self.timeouts.iter_mut().for_each(|handler| {
-            let current_met = if !self.inhibited {
+            let current_met = if !self.inhibitors.active() {
                 handler.conditions.iter().all(|condition| {
                     #[cfg(feature = "upower")]
                     match condition {
@@ -435,7 +456,9 @@ async fn main() -> Result<()> {
         })?;
     }
 
-    event_loop.handle().insert_source(executor, |_, _, _| ())?;
+    event_loop
+        .handle()
+        .insert_source(executor, |_: (), _, _| ())?;
     event_loop
         .handle()
         .insert_source(event_receiver, |event, _, state| {

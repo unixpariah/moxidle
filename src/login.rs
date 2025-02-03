@@ -31,6 +31,7 @@ trait LoginSession {
 }
 
 async fn handle_block_inhibited(value: &str, sender: &channel::Sender<Event>) {
+    log::info!("Sending BlockInhibited event");
     if let Err(e) = sender.send(Event::BlockInhibited(value.to_string())) {
         log::warn!("Failed to send BlockInhibited event: {}", e);
     }
@@ -86,7 +87,7 @@ pub async fn serve(
         let event_sender = event_sender.clone();
         tokio::spawn(async move {
             while lock_stream.next().await.is_some() {
-                log::info!("Session lock requested");
+                log::info!("Sending SessionLocked(true) event");
                 if let Err(e) = event_sender.send(Event::SessionLocked(true)) {
                     log::info!("Failed to get unlock args: {}", e)
                 }
@@ -98,7 +99,7 @@ pub async fn serve(
         let event_sender = event_sender.clone();
         tokio::spawn(async move {
             while unlock_stream.next().await.is_some() {
-                log::info!("Session unlock requested");
+                log::info!("Sending SessionLocked(false) event");
                 if let Err(e) = event_sender.send(Event::SessionLocked(false)) {
                     log::info!("Failed to get unlock args: {}", e)
                 }
@@ -111,7 +112,9 @@ pub async fn serve(
         tokio::spawn(async move {
             while let Some(sleep) = sleep_stream.next().await {
                 if let Ok(sleep) = sleep.args() {
-                    if let Err(e) = event_sender.send(Event::PrepareForSleep(*sleep.start())) {
+                    let start = *sleep.start();
+                    log::info!("Sending PrepareForSleep({}) event", start);
+                    if let Err(e) = event_sender.send(Event::PrepareForSleep(start)) {
                         log::info!("Failed to get sleep args: {}", e)
                     }
                 }

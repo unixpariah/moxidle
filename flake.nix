@@ -27,6 +27,7 @@
           with pkgs;
           mkShell {
             buildInputs = [
+              scdoc
               cargo
               rustc
               rust-analyzer
