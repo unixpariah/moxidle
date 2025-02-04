@@ -31,7 +31,7 @@ fn process_sink_inputs(
                 let is_playing = playing.get();
                 log::info!("Sending AudioInhibit({}) event", is_playing);
                 if let Err(e) = event_sender.send(Event::AudioInhibit(is_playing)) {
-                    log::error!("Failed to send AudioInhibit event: {}", e);
+                    log::error!("Failed to send AudioInhibit({}) event: {}", is_playing, e);
                 }
             }
         }

@@ -14,7 +14,8 @@ use clap::Parser;
 use config::{Condition, Config, MoxidleConfig, TimeoutConfig};
 use env_logger::Builder;
 use log::LevelFilter;
-use std::{error::Error, ops::Deref, path::PathBuf, process::Command, sync::Arc};
+use std::{error::Error, ops::Deref, path::PathBuf, sync::Arc, time::Instant};
+use tokio::sync::{oneshot, RwLock};
 #[cfg(feature = "upower")]
 use upower::Power;
 use wayland_client::{
@@ -90,7 +91,28 @@ impl Inhibitors {
     }
 }
 
+#[derive(PartialEq)]
+enum LockState {
+    Locked,
+    Unlocked,
+}
+
+struct State {
+    lock_state: LockState,
+    active_since: Option<Instant>,
+}
+
+impl Default for State {
+    fn default() -> Self {
+        Self {
+            active_since: None,
+            lock_state: LockState::Unlocked,
+        }
+    }
+}
+
 struct Moxidle {
+    state: Arc<RwLock<State>>,
     seat: wl_seat::WlSeat,
     notifier: ext_idle_notifier_v1::ExtIdleNotifierV1,
     timeouts: Vec<TimeoutHandler>,
@@ -130,6 +152,7 @@ impl Moxidle {
             .collect();
 
         Ok(Self {
+            state: Arc::new(RwLock::new(State::default())),
             #[cfg(feature = "upower")]
             power: Power::default(),
             timeouts,
@@ -154,7 +177,11 @@ impl Moxidle {
                 self.reset_idle_timers();
             }
             #[cfg(feature = "dbus")]
-            Event::ScreensaverInhibit(inhibited) => {
+            Event::SimulateUserActivity => {
+                self.reset_idle_timers();
+            }
+            #[cfg(feature = "dbus")]
+            Event::ScreenSaverInhibit(inhibited) => {
                 self.inhibitors.dbus_inhibitor = inhibited;
                 self.reset_idle_timers();
             }
@@ -173,14 +200,28 @@ impl Moxidle {
                     self.reset_idle_timers();
                 }
             }
-            #[cfg(feature = "systemd")]
+            #[cfg(feature = "dbus")]
             Event::SessionLocked(locked) => {
                 if locked {
                     if let Some(lock_cmd) = self.lock_cmd.as_ref() {
                         execute_command(lock_cmd.clone());
+                        let state = self.state.clone();
+                        tokio::spawn(async move {
+                            let mut state = state.write().await;
+                            if state.active_since.is_none() {
+                                state.active_since = Some(Instant::now());
+                            }
+                            state.lock_state = LockState::Locked;
+                        });
                     }
                 } else if let Some(unlock_cmd) = self.unlock_cmd.as_ref() {
                     execute_command(unlock_cmd.clone());
+                    let state = self.state.clone();
+                    tokio::spawn(async move {
+                        let mut state = state.write().await;
+                        state.active_since = None;
+                        state.lock_state = LockState::Unlocked;
+                    });
                 }
             }
             #[cfg(feature = "systemd")]
@@ -248,7 +289,9 @@ enum Event {
     #[cfg(feature = "upower")]
     BatteryPercentage(f64),
     #[cfg(feature = "dbus")]
-    ScreensaverInhibit(bool),
+    ScreenSaverInhibit(bool),
+    #[cfg(feature = "dbus")]
+    SimulateUserActivity,
     #[cfg(feature = "systemd")]
     SessionLocked(bool),
     #[cfg(feature = "systemd")]
@@ -259,26 +302,32 @@ enum Event {
     AudioInhibit(bool),
 }
 
-fn execute_command(command: Arc<str>) {
-    let mut child = match Command::new("/bin/sh")
-        .arg("-c")
-        .arg(command.as_ref())
-        .spawn()
-    {
-        Ok(child) => child,
-        Err(err) => {
-            log::error!("failed to execute command '{}': {}", command, err);
-            return;
-        }
-    };
+fn execute_command(command: Arc<str>) -> oneshot::Receiver<()> {
+    let (sender, receiver) = oneshot::channel();
 
-    std::thread::spawn(move || match child.wait() {
-        Ok(status) if status.success() => {}
-        Ok(status) => {
-            log::error!("command '{}' failed with exit status {}", command, status)
+    std::thread::spawn(move || {
+        let mut child = match std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg(command.as_ref())
+            .spawn()
+        {
+            Ok(child) => child,
+            Err(err) => {
+                log::error!("failed to execute command '{}': {}", command, err);
+                let _ = sender.send(());
+                return;
+            }
+        };
+
+        match child.wait() {
+            Ok(status) if status.success() => {}
+            Ok(status) => log::error!("command '{}' failed with exit status {}", command, status),
+            Err(err) => log::error!("failed to wait on command '{}': {}", command, err),
         }
-        Err(err) => log::error!("failed to wait on command '{}': {}", command, err),
+        let _ = sender.send(());
     });
+
+    receiver
 }
 
 impl Dispatch<ext_idle_notification_v1::ExtIdleNotificationV1, ()> for Moxidle {
@@ -304,11 +353,33 @@ impl Dispatch<ext_idle_notification_v1::ExtIdleNotificationV1, ()> for Moxidle {
                     log::info!("Executing timeout command: {}", cmd);
                     execute_command(cmd.clone());
                 }
+
+                let state = state.state.clone();
+                tokio::spawn(async move {
+                    let mut state = state.write().await;
+                    if state.active_since.is_none() {
+                        state.active_since = Some(Instant::now());
+                    }
+                    state.lock_state = LockState::Locked;
+                });
             }
             ext_idle_notification_v1::Event::Resumed => {
+                let state = state.state.clone();
                 if let Some(cmd) = handler.on_resume() {
                     log::info!("Executing resume command: {}", cmd);
-                    execute_command(cmd.clone());
+                    let receiver = execute_command(cmd.clone());
+                    tokio::spawn(async move {
+                        _ = receiver.await;
+                        let mut state = state.write().await;
+                        state.active_since = None;
+                        state.lock_state = LockState::Unlocked;
+                    });
+                } else {
+                    tokio::spawn(async move {
+                        let mut state = state.write().await;
+                        state.active_since = None;
+                        state.lock_state = LockState::Unlocked;
+                    });
                 }
             }
             _ => (),
@@ -424,10 +495,11 @@ async fn main() -> Result<()> {
 
     #[cfg(feature = "dbus")]
     {
+        let state = moxidle.state.clone();
         let ignore_dbus_inhibit = moxidle.ignore_dbus_inhibit;
         let event_sender = event_sender.clone();
         scheduler.schedule(async move {
-            if let Err(e) = screensaver::serve(event_sender, ignore_dbus_inhibit).await {
+            if let Err(e) = screensaver::serve(event_sender, ignore_dbus_inhibit, state).await {
                 log::error!("D-Bus screensaver error: {}", e);
             }
         })?;
