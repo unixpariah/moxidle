@@ -1,22 +1,19 @@
-#[cfg(feature = "audio")]
 mod audio;
 mod config;
-#[cfg(feature = "systemd")]
 mod login;
-#[cfg(feature = "dbus")]
 mod screensaver;
-#[cfg(feature = "upower")]
 mod upower;
 
 use calloop::{channel, EventLoop};
 use calloop_wayland_source::WaylandSource;
 use clap::Parser;
-use config::{Condition, Config, MoxidleConfig, TimeoutConfig};
+use config::Condition;
+use config::{Config, MoxidleConfig, TimeoutConfig};
 use env_logger::Builder;
 use log::LevelFilter;
 use std::{error::Error, ops::Deref, path::PathBuf, sync::Arc, time::Instant};
-use tokio::sync::{oneshot, RwLock};
-#[cfg(feature = "upower")]
+use tokio::process::Command;
+use tokio::sync::RwLock;
 use upower::Power;
 use wayland_client::{
     delegate_noop,
@@ -62,32 +59,14 @@ impl TimeoutHandler {
 
 #[derive(Default)]
 struct Inhibitors {
-    #[cfg(feature = "audio")]
     audio_inhibitor: bool,
-    #[cfg(feature = "dbus")]
     dbus_inhibitor: bool,
-    #[cfg(feature = "systemd")]
     systemd_inhibitor: bool,
 }
 
 impl Inhibitors {
     fn active(&self) -> bool {
-        #[allow(unused_mut)]
-        let mut active = false;
-        #[cfg(feature = "dbus")]
-        {
-            active |= self.dbus_inhibitor;
-        }
-        #[cfg(feature = "audio")]
-        {
-            active |= self.audio_inhibitor;
-        }
-        #[cfg(feature = "systemd")]
-        {
-            active |= self.systemd_inhibitor;
-        }
-
-        active
+        self.dbus_inhibitor || self.audio_inhibitor || self.systemd_inhibitor
     }
 }
 
@@ -119,7 +98,6 @@ struct Moxidle {
     config: MoxidleConfig,
     inhibitors: Inhibitors,
     qh: QueueHandle<Self>,
-    #[cfg(feature = "upower")]
     power: Power,
 }
 
@@ -153,7 +131,6 @@ impl Moxidle {
 
         Ok(Self {
             state: Arc::new(RwLock::new(State::default())),
-            #[cfg(feature = "upower")]
             power: Power::default(),
             timeouts,
             config: general_config,
@@ -164,74 +141,79 @@ impl Moxidle {
         })
     }
 
-    fn handle_app_event(&mut self, event: Event) {
+    async fn handle_app_event(&mut self, event: Event) {
         match event {
-            #[cfg(feature = "upower")]
             Event::OnBattery(on_battery) => {
                 self.power.unplugged = on_battery;
                 self.reset_idle_timers();
             }
-            #[cfg(feature = "upower")]
             Event::BatteryPercentage(battery) => {
-                self.power.percentage = battery;
+                self.power.percentage = battery.clamp(0.0, 100.0);
                 self.reset_idle_timers();
             }
-            #[cfg(feature = "dbus")]
             Event::SimulateUserActivity => {
                 self.reset_idle_timers();
             }
-            #[cfg(feature = "dbus")]
             Event::ScreenSaverInhibit(inhibited) => {
                 self.inhibitors.dbus_inhibitor = inhibited;
                 self.reset_idle_timers();
             }
-            #[cfg(feature = "audio")]
             Event::AudioInhibit(inhibited) => {
                 self.inhibitors.audio_inhibitor = inhibited;
                 self.reset_idle_timers();
             }
-            #[cfg(feature = "systemd")]
             Event::BlockInhibited(inhibition) => {
-                if inhibition.contains("idle") {
-                    self.inhibitors.dbus_inhibitor = true;
-                    self.reset_idle_timers();
-                } else {
-                    self.inhibitors.dbus_inhibitor = false;
-                    self.reset_idle_timers();
-                }
+                self.inhibitors.dbus_inhibitor = inhibition.contains("idle");
+                self.reset_idle_timers();
             }
-            #[cfg(feature = "dbus")]
             Event::SessionLocked(locked) => {
-                if locked {
-                    if let Some(lock_cmd) = self.lock_cmd.as_ref() {
-                        execute_command(lock_cmd.clone());
-                        let state = self.state.clone();
-                        tokio::spawn(async move {
-                            let mut state = state.write().await;
-                            if state.active_since.is_none() {
-                                state.active_since = Some(Instant::now());
-                            }
-                            state.lock_state = LockState::Locked;
-                        });
-                    }
-                } else if let Some(unlock_cmd) = self.unlock_cmd.as_ref() {
-                    execute_command(unlock_cmd.clone());
-                    let state = self.state.clone();
+                let cmd = if locked {
+                    self.lock_cmd.as_ref()
+                } else {
+                    self.unlock_cmd.as_ref()
+                };
+
+                if let Some(cmd) = cmd {
+                    let cmd = cmd.clone();
                     tokio::spawn(async move {
-                        let mut state = state.write().await;
-                        state.active_since = None;
-                        state.lock_state = LockState::Unlocked;
+                        execute_command(cmd).await;
                     });
                 }
+
+                let mut state = self.state.write().await;
+                if locked {
+                    state.active_since.get_or_insert(Instant::now());
+                    state.lock_state = LockState::Locked;
+                } else {
+                    state.active_since = None;
+                    state.lock_state = LockState::Unlocked;
+                }
             }
-            #[cfg(feature = "systemd")]
-            Event::PrepareForSleep(sleep) => {
-                if sleep {
-                    if let Some(before_sleep_cmd) = self.before_sleep_cmd.as_ref() {
-                        execute_command(before_sleep_cmd.clone());
-                    } else if let Some(after_sleep_cmd) = self.after_sleep_cmd.as_ref() {
-                        execute_command(after_sleep_cmd.clone());
+            Event::ScreenSaverLock => {
+                if let Some(lock_cmd) = self.lock_cmd.as_ref() {
+                    let lock_cmd = lock_cmd.clone();
+                    tokio::spawn(async move {
+                        execute_command(lock_cmd).await;
+                    });
+                    let mut state = self.state.write().await;
+                    if state.active_since.is_none() {
+                        state.active_since = Some(Instant::now());
                     }
+                    state.lock_state = LockState::Locked;
+                }
+            }
+            Event::PrepareForSleep(sleep) => {
+                let cmd = if sleep {
+                    self.before_sleep_cmd.as_ref()
+                } else {
+                    self.after_sleep_cmd.as_ref()
+                };
+
+                if let Some(cmd) = cmd {
+                    let cmd = cmd.clone();
+                    tokio::spawn(async move {
+                        execute_command(cmd).await;
+                    });
                 }
             }
         }
@@ -240,16 +222,11 @@ impl Moxidle {
     fn reset_idle_timers(&mut self) {
         self.timeouts.iter_mut().for_each(|handler| {
             let current_met = if !self.inhibitors.active() {
-                handler.conditions.iter().all(|condition| {
-                    #[cfg(feature = "upower")]
-                    match condition {
-                        Condition::OnBattery => self.power.unplugged,
-                        Condition::OnAc => !self.power.unplugged,
-                        Condition::BatteryBelow(battery) => self.power.percentage.lt(battery),
-                        Condition::BatteryAbove(battery) => self.power.percentage.gt(battery),
-                    }
-                    #[cfg(not(feature = "upower"))]
-                    true
+                handler.conditions.iter().all(|condition| match condition {
+                    Condition::OnBattery => self.power.unplugged,
+                    Condition::OnAc => !self.power.unplugged,
+                    Condition::BatteryBelow(battery) => self.power.percentage.lt(battery),
+                    Condition::BatteryAbove(battery) => self.power.percentage.gt(battery),
                 })
             } else {
                 false
@@ -265,17 +242,19 @@ impl Moxidle {
                     ));
 
                     log::info!(
-                        "Notification created\ntimeout: {}\ncommand: {:?}",
+                        "Notification created\ntimeout: {}\non_timeout: {:?}\non_resume: {:?}",
                         handler.timeout,
-                        handler.on_timeout
+                        handler.on_timeout,
+                        handler.on_resume
                     );
                 }
             } else if let Some(notification) = handler.notification.take() {
                 notification.destroy();
                 log::info!(
-                    "Notification destroyed\ntimeout: {}\ncommand: {:?}",
+                    "Notification destroyed\ntimeout: {}\non_timeout: {:?}\non_resume: {:?}",
                     handler.timeout,
-                    handler.on_timeout
+                    handler.on_timeout,
+                    handler.on_resume
                 );
             }
         });
@@ -284,50 +263,33 @@ impl Moxidle {
 
 #[derive(Debug)]
 enum Event {
-    #[cfg(feature = "upower")]
     OnBattery(bool),
-    #[cfg(feature = "upower")]
     BatteryPercentage(f64),
-    #[cfg(feature = "dbus")]
     ScreenSaverInhibit(bool),
-    #[cfg(feature = "dbus")]
     SimulateUserActivity,
-    #[cfg(feature = "systemd")]
     SessionLocked(bool),
-    #[cfg(feature = "systemd")]
+    ScreenSaverLock,
     BlockInhibited(String),
-    #[cfg(feature = "systemd")]
     PrepareForSleep(bool),
-    #[cfg(feature = "audio")]
     AudioInhibit(bool),
 }
 
-fn execute_command(command: Arc<str>) -> oneshot::Receiver<()> {
-    let (sender, receiver) = oneshot::channel();
-
-    std::thread::spawn(move || {
-        let mut child = match std::process::Command::new("/bin/sh")
-            .arg("-c")
-            .arg(command.as_ref())
-            .spawn()
-        {
-            Ok(child) => child,
-            Err(err) => {
-                log::error!("failed to execute command '{}': {}", command, err);
-                let _ = sender.send(());
-                return;
+async fn execute_command(command: Arc<str>) {
+    match Command::new("/bin/sh")
+        .arg("-c")
+        .arg(&*command)
+        .status()
+        .await
+    {
+        Ok(status) => {
+            if !status.success() {
+                log::error!("command '{}' failed with exit status {}", command, status);
             }
-        };
-
-        match child.wait() {
-            Ok(status) if status.success() => {}
-            Ok(status) => log::error!("command '{}' failed with exit status {}", command, status),
-            Err(err) => log::error!("failed to wait on command '{}': {}", command, err),
         }
-        let _ = sender.send(());
-    });
-
-    receiver
+        Err(e) => {
+            log::error!("Command '{}' failed {}", command, e);
+        }
+    }
 }
 
 impl Dispatch<ext_idle_notification_v1::ExtIdleNotificationV1, ()> for Moxidle {
@@ -349,27 +311,35 @@ impl Dispatch<ext_idle_notification_v1::ExtIdleNotificationV1, ()> for Moxidle {
 
         match event {
             ext_idle_notification_v1::Event::Idled => {
+                let state = state.state.clone();
                 if let Some(cmd) = handler.on_timeout() {
                     log::info!("Executing timeout command: {}", cmd);
-                    execute_command(cmd.clone());
+                    let cmd = cmd.clone();
+                    tokio::spawn(async move {
+                        execute_command(cmd).await;
+                        let mut state = state.write().await;
+                        if state.active_since.is_none() {
+                            state.active_since = Some(Instant::now());
+                        }
+                        state.lock_state = LockState::Locked;
+                    });
+                } else {
+                    tokio::spawn(async move {
+                        let mut state = state.write().await;
+                        if state.active_since.is_none() {
+                            state.active_since = Some(Instant::now());
+                        }
+                        state.lock_state = LockState::Locked;
+                    });
                 }
-
-                let state = state.state.clone();
-                tokio::spawn(async move {
-                    let mut state = state.write().await;
-                    if state.active_since.is_none() {
-                        state.active_since = Some(Instant::now());
-                    }
-                    state.lock_state = LockState::Locked;
-                });
             }
             ext_idle_notification_v1::Event::Resumed => {
                 let state = state.state.clone();
                 if let Some(cmd) = handler.on_resume() {
                     log::info!("Executing resume command: {}", cmd);
-                    let receiver = execute_command(cmd.clone());
+                    let cmd = cmd.clone();
                     tokio::spawn(async move {
-                        _ = receiver.await;
+                        execute_command(cmd).await;
                         let mut state = state.write().await;
                         state.active_since = None;
                         state.lock_state = LockState::Unlocked;
@@ -456,9 +426,7 @@ async fn main() -> Result<()> {
     let (executor, scheduler) = calloop::futures::executor()?;
     let (event_sender, event_receiver) = channel::channel();
 
-    #[cfg(feature = "dbus")]
     let dbus_conn = Arc::new(zbus::Connection::system().await?);
-    #[cfg(feature = "upower")]
     {
         let ignore_on_battery = !moxidle.timeouts.iter().any(|timeout| {
             timeout
@@ -493,7 +461,6 @@ async fn main() -> Result<()> {
         })?;
     }
 
-    #[cfg(feature = "dbus")]
     {
         let state = moxidle.state.clone();
         let ignore_dbus_inhibit = moxidle.ignore_dbus_inhibit;
@@ -505,7 +472,6 @@ async fn main() -> Result<()> {
         })?;
     }
 
-    #[cfg(feature = "systemd")]
     {
         let ignore_systemd_inhibit = moxidle.ignore_systemd_inhibit;
         let event_sender = event_sender.clone();
@@ -517,7 +483,6 @@ async fn main() -> Result<()> {
         })?;
     }
 
-    #[cfg(feature = "audio")]
     {
         let ignore_audio_inhibit = moxidle.ignore_audio_inhibit;
         let event_sender = event_sender.clone();
@@ -535,7 +500,7 @@ async fn main() -> Result<()> {
         .handle()
         .insert_source(event_receiver, |event, _, state| {
             if let channel::Event::Msg(event) = event {
-                state.handle_app_event(event);
+                pollster::block_on(state.handle_app_event(event));
             }
         })?;
 

@@ -4,22 +4,9 @@
   libpulseaudio,
   lib,
   rustPlatform,
-  withDbus ? true,
-  withSystemd ? true,
-  withUpower ? true,
-  withPulse ? true,
 }:
 let
   cargoToml = builtins.fromTOML (builtins.readFile ../Cargo.toml);
-  enabledFeatures = lib.concatMapStringsSep "," (feature: feature) (
-    lib.optional withDbus "dbus"
-    ++ lib.optional withSystemd "systemd"
-    ++ lib.optional withUpower "upower"
-    ++ lib.optional withPulse "audio"
-  );
-  pkgConfigPathStr = lib.concatStringsSep "" (
-    lib.optional withPulse ":${libpulseaudio}/lib/pkgconfig"
-  );
 in
 rustPlatform.buildRustPackage {
   pname = "moxidle";
@@ -40,18 +27,11 @@ rustPlatform.buildRustPackage {
 
   buildInputs = [
     lua5_4
-  ] ++ lib.optional withPulse libpulseaudio;
-
-  cargoBuildFlags =
-    [
-      "--no-default-features"
-    ]
-    ++ lib.optionals (enabledFeatures != "") [
-      "--features=${enabledFeatures}"
-    ];
+    libpulseaudio
+  ];
 
   configurePhase = ''
-    export PKG_CONFIG_PATH=${lua5_4}/lib/pkgconfig${pkgConfigPathStr}
+    export PKG_CONFIG_PATH=${lua5_4}/lib/pkgconfig:${libpulseaudio}/lib/pkgconfig
   '';
 
   meta = with lib; {

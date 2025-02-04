@@ -29,13 +29,12 @@ struct ScreenSaver {
 
 #[zbus::interface(name = "org.freedesktop.ScreenSaver")]
 impl ScreenSaver {
-    // TODO
     #[zbus(signal)]
     async fn active_changed(&mut self, signal_emitter: &SignalEmitter<'_>) -> zbus::Result<()>;
 
     async fn lock(&self) {
         log::info!("Sending SessionLocked(true) event");
-        if let Err(e) = self.event_sender.send(Event::SessionLocked(true)) {
+        if let Err(e) = self.event_sender.send(Event::ScreenSaverLock) {
             log::error!("Failed to send SessionLocked(true) event: {}", e);
         }
     }
@@ -130,6 +129,7 @@ impl ScreenSaver {
         #[zbus(header)] header: zbus::message::Header<'_>,
     ) -> u32 {
         // TODO
+        _ = header;
         _ = application_name;
         _ = reason_for_inhibit;
 

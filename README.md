@@ -9,6 +9,7 @@ Feature-rich Wayland idle daemon.
 - Handles DBus idle-inhibit (used by applications like Firefox and Steam)
 - Supports audio-based idle inhibition
 - Allows for configurable conditional timeouts
+- Extends beyond default org.freedesktop.SessionManager protocol by implementing additional features available in kscreenlocker
 
 ## Configuration
 
@@ -51,12 +52,12 @@ You can define multiple timeout rules. If `on_timeout` or `on_resume` is omitted
 ### Build-time  
 - **Lua** 5.4  
 - **Rust**  
+- **dbus**
 - **libpulseaudio** (Optional, required if audio features are enabled)  
 
 ### Runtime  
 - **wayland**  
-- **dbus** (Optional, required if dbus-related features are enabled)  
-- **upower** (Optional, required if upower integration is enabled)  
+- **upower** (Optional, required if battery-related conditions are set)  
 
 ## Building  
 
@@ -64,21 +65,6 @@ To build with default features:
 ```sh
 cargo build --release
 ```
-
-### Custom Build
-
-To disable specific integrations (dbus, systemd, audio, upower), run:
-
-```sh
-cargo build --no-default-features --features="dbus systemd upower audio"
-```
-
-### Feature Flags
-
-- `dbus` – Enables dbus integration
-- `systemd` – Enables Systemd integration (enables `dbus`)
-- `upower` – Enables integration with the upower dbus service (enables `dbus`)
-- `audio` – Enables audio integration
 
 ## Installation
 

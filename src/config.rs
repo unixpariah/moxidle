@@ -37,21 +37,14 @@ impl Config {
 
 #[derive(Deserialize)]
 pub struct MoxidleConfig {
-    #[cfg(feature = "systemd")]
     pub lock_cmd: Option<Arc<str>>,
-    #[cfg(feature = "systemd")]
     pub unlock_cmd: Option<Arc<str>>,
-    #[cfg(feature = "systemd")]
     pub before_sleep_cmd: Option<Arc<str>>,
-    #[cfg(feature = "systemd")]
     pub after_sleep_cmd: Option<Arc<str>>,
-    #[cfg(feature = "dbus")]
     #[serde(default)]
     pub ignore_dbus_inhibit: bool,
-    #[cfg(feature = "systemd")]
     #[serde(default)]
     pub ignore_systemd_inhibit: bool,
-    #[cfg(feature = "audio")]
     #[serde(default)]
     pub ignore_audio_inhibit: bool,
 }
@@ -59,13 +52,9 @@ pub struct MoxidleConfig {
 #[derive(Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum Condition {
-    #[cfg(feature = "upower")]
     OnBattery,
-    #[cfg(feature = "upower")]
     OnAc,
-    #[cfg(feature = "upower")]
     BatteryBelow(f64),
-    #[cfg(feature = "upower")]
     BatteryAbove(f64),
 }
 
