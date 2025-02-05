@@ -12,7 +12,7 @@ use tokio::sync::{Mutex, RwLock};
 use zbus::object_server::SignalEmitter;
 
 #[derive(Debug)]
-pub struct Inhibitor {
+struct Inhibitor {
     cookie: u32,
     application_name: Box<str>,
     reason_for_inhibit: Box<str>,

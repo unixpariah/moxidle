@@ -771,6 +771,7 @@ dependencies = [
  "mlua",
  "pollster",
  "serde",
+ "serde_repr",
  "tokio",
  "wayland-client",
  "wayland-protocols",

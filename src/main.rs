@@ -14,7 +14,7 @@ use log::LevelFilter;
 use std::{error::Error, ops::Deref, path::PathBuf, sync::Arc, time::Instant};
 use tokio::process::Command;
 use tokio::sync::RwLock;
-use upower::Power;
+use upower::{BatteryLevel, BatteryState, LevelComparison, Power, PowerSource};
 use wayland_client::{
     delegate_noop,
     globals::{registry_queue_init, GlobalList, GlobalListContents},
@@ -141,14 +141,32 @@ impl Moxidle {
         })
     }
 
+    fn should_ignore<F>(&self, condition_predicate: F) -> bool
+    where
+        F: Fn(&Condition) -> bool,
+    {
+        !self
+            .timeouts
+            .iter()
+            .any(|timeout| timeout.config.conditions.iter().any(&condition_predicate))
+    }
+
     async fn handle_app_event(&mut self, event: Event) {
         match event {
+            Event::BatteryState(state) => {
+                self.power.update_state(state);
+                self.reset_idle_timers();
+            }
+            Event::BatteryLevel(level) => {
+                self.power.update_level(level);
+                self.reset_idle_timers();
+            }
             Event::OnBattery(on_battery) => {
-                self.power.unplugged = on_battery;
+                self.power.update_source(on_battery);
                 self.reset_idle_timers();
             }
             Event::BatteryPercentage(battery) => {
-                self.power.percentage = battery.clamp(0.0, 100.0);
+                self.power.update_percentage(battery);
                 self.reset_idle_timers();
             }
             Event::SimulateUserActivity => {
@@ -220,13 +238,23 @@ impl Moxidle {
     }
 
     fn reset_idle_timers(&mut self) {
+        let power = &self.power;
         self.timeouts.iter_mut().for_each(|handler| {
             let current_met = if !self.inhibitors.active() {
                 handler.conditions.iter().all(|condition| match condition {
-                    Condition::OnBattery => self.power.unplugged,
-                    Condition::OnAc => !self.power.unplugged,
-                    Condition::BatteryBelow(battery) => self.power.percentage.lt(battery),
-                    Condition::BatteryAbove(battery) => self.power.percentage.gt(battery),
+                    Condition::OnBattery => power.source() == &PowerSource::Battery,
+                    Condition::OnAc => power.source() == &PowerSource::Plugged,
+                    Condition::BatteryBelow(battery) => {
+                        power.level_cmp(battery) == LevelComparison::Below
+                    }
+                    Condition::BatteryAbove(battery) => {
+                        power.level_cmp(battery) == LevelComparison::Above
+                    }
+                    Condition::BatteryEqual(battery) => {
+                        power.level_cmp(battery) == LevelComparison::Equal
+                    }
+                    Condition::BatteryLevel(level) => power.level() == level,
+                    Condition::BatteryState(state) => power.state() == state,
                 })
             } else {
                 false
@@ -261,8 +289,9 @@ impl Moxidle {
     }
 }
 
-#[derive(Debug)]
 enum Event {
+    BatteryState(BatteryState),
+    BatteryLevel(BatteryLevel),
     OnBattery(bool),
     BatteryPercentage(f64),
     ScreenSaverInhibit(bool),
@@ -428,22 +457,19 @@ async fn main() -> Result<()> {
 
     let dbus_conn = Arc::new(zbus::Connection::system().await?);
     {
-        let ignore_on_battery = !moxidle.timeouts.iter().any(|timeout| {
-            timeout
-                .config
-                .conditions
-                .iter()
-                .any(|condition| *condition == Condition::OnBattery)
+        let ignore_on_battery = moxidle.should_ignore(|c| *c == Condition::OnBattery);
+        let ignore_battery_percentage = moxidle.should_ignore(|c| {
+            matches!(
+                c,
+                Condition::BatteryBelow(_)
+                    | Condition::BatteryAbove(_)
+                    | Condition::BatteryEqual(_)
+            )
         });
-
-        let ignore_battery_percentage = !moxidle.timeouts.iter().any(|timeout| {
-            timeout.config.conditions.iter().any(|condition| {
-                matches!(
-                    condition,
-                    Condition::BatteryBelow(_) | Condition::BatteryAbove(_)
-                )
-            })
-        });
+        let ignore_battery_state =
+            moxidle.should_ignore(|c| matches!(c, Condition::BatteryState(_)));
+        let ignore_battery_level =
+            moxidle.should_ignore(|c| matches!(c, Condition::BatteryLevel(_)));
 
         let event_sender = event_sender.clone();
         let dbus_conn = Arc::clone(&dbus_conn);
@@ -453,6 +479,8 @@ async fn main() -> Result<()> {
                 event_sender,
                 ignore_on_battery,
                 ignore_battery_percentage,
+                ignore_battery_state,
+                ignore_battery_level,
             )
             .await
             {
