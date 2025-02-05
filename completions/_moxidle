@@ -1,0 +1,9 @@
+#compdef moxidle
+
+_arguments \
+  '-c[Specify a custom config path (default: ~/.config/moxidle/config.lua)]:config_path:_files' \
+  '--config[Specify a custom config path (default: ~/.config/moxidle/config.lua)]:config_path:_files' \
+  '*-q[Suppress output (can be repeated)]' \
+  '*--quiet[Suppress output (can be repeated)]' \
+  '*-v[Enable verbose logging (can be repeated)]' \
+  '*--verbose[Enable verbose logging (can be repeated)]'

@@ -419,7 +419,7 @@ struct Cli {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    let mut log_level = LevelFilter::Error;
+    let mut log_level = LevelFilter::Info;
 
     (0..cli.verbose).for_each(|_| {
         log_level = match log_level {
