@@ -65,17 +65,22 @@ pub enum Condition {
     BatteryState(BatteryState),
 }
 
-impl From<&str> for BatteryState {
-    fn from(s: &str) -> BatteryState {
+#[derive(Debug)]
+pub struct InvalidBatteryStateError;
+
+impl TryFrom<&str> for BatteryState {
+    type Error = InvalidBatteryStateError;
+
+    fn try_from(s: &str) -> Result<Self, Self::Error> {
         match s {
-            "unknown" => BatteryState::Unknown,
-            "charging" => BatteryState::Charging,
-            "discharging" => BatteryState::Discharging,
-            "empty" => BatteryState::Empty,
-            "fully_charged" => BatteryState::FullyCharged,
-            "pending_charge" => BatteryState::PendingCharge,
-            "pending_discharge" => BatteryState::PendingDischarge,
-            _ => todo!(),
+            "unknown" => Ok(BatteryState::Unknown),
+            "charging" => Ok(BatteryState::Charging),
+            "discharging" => Ok(BatteryState::Discharging),
+            "empty" => Ok(BatteryState::Empty),
+            "fully_charged" => Ok(BatteryState::FullyCharged),
+            "pending_charge" => Ok(BatteryState::PendingCharge),
+            "pending_discharge" => Ok(BatteryState::PendingDischarge),
+            _ => Err(InvalidBatteryStateError),
         }
     }
 }
@@ -113,24 +118,30 @@ where
         where
             E: serde::de::Error,
         {
-            Ok(BatteryState::from(value))
+            BatteryState::try_from(value)
+                .map_err(|_| E::custom(format!("Invalid BatteryState string: {}", value)))
         }
     }
 
     deserializer.deserialize_any(BatteryStateVisitor)
 }
 
-impl From<&str> for BatteryLevel {
-    fn from(s: &str) -> BatteryLevel {
+#[derive(Debug)]
+pub struct InvalidBatteryLevelError;
+
+impl TryFrom<&str> for BatteryLevel {
+    type Error = InvalidBatteryLevelError;
+
+    fn try_from(s: &str) -> Result<Self, Self::Error> {
         match s {
-            "unknown" => BatteryLevel::Unknown,
-            "none" => BatteryLevel::None,
-            "low" => BatteryLevel::Low,
-            "critical" => BatteryLevel::Critical,
-            "normal" => BatteryLevel::Normal,
-            "high" => BatteryLevel::High,
-            "full" => BatteryLevel::Full,
-            _ => todo!(),
+            "unknown" => Ok(BatteryLevel::Unknown),
+            "none" => Ok(BatteryLevel::None),
+            "low" => Ok(BatteryLevel::Low),
+            "critical" => Ok(BatteryLevel::Critical),
+            "normal" => Ok(BatteryLevel::Normal),
+            "high" => Ok(BatteryLevel::High),
+            "full" => Ok(BatteryLevel::Full),
+            _ => Err(InvalidBatteryLevelError),
         }
     }
 }
@@ -168,7 +179,8 @@ where
         where
             E: serde::de::Error,
         {
-            Ok(BatteryLevel::from(value))
+            BatteryLevel::try_from(value)
+                .map_err(|_| E::custom(format!("Invalid BatteryState string: {}", value)))
         }
     }
 
