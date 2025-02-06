@@ -4,13 +4,14 @@ mod login;
 mod screensaver;
 mod upower;
 
-use calloop::{channel, EventLoop};
+use calloop::EventLoop;
 use calloop_wayland_source::WaylandSource;
 use clap::Parser;
 use config::Condition;
 use config::{Config, MoxidleConfig, TimeoutConfig};
 use env_logger::Builder;
 use log::LevelFilter;
+use std::process::Stdio;
 use std::{error::Error, ops::Deref, path::PathBuf, sync::Arc, time::Instant};
 use tokio::process::Command;
 use tokio::sync::RwLock;
@@ -79,13 +80,27 @@ enum LockState {
 struct State {
     lock_state: LockState,
     active_since: Option<Instant>,
+    emit_sender: tokio::sync::mpsc::Sender<()>,
 }
 
-impl Default for State {
-    fn default() -> Self {
+impl State {
+    fn new(emit_sender: tokio::sync::mpsc::Sender<()>) -> Self {
         Self {
             active_since: None,
             lock_state: LockState::Unlocked,
+            emit_sender,
+        }
+    }
+
+    async fn set_lock_state(&mut self, lock_state: LockState) {
+        if self.lock_state != lock_state {
+            if let Err(e) = self.emit_sender.send(()).await {
+                log::error!("Failed to send emit event: {e}");
+            }
+            self.lock_state = lock_state;
+            if self.lock_state == LockState::Locked {
+                self.active_since = Some(Instant::now());
+            }
         }
     }
 }
@@ -114,6 +129,7 @@ impl Moxidle {
         globals: GlobalList,
         qh: QueueHandle<Self>,
         config_path: Option<PathBuf>,
+        emit_sender: tokio::sync::mpsc::Sender<()>,
     ) -> Result<Self> {
         let notifier = globals
             .bind(&qh, 1..=1, ())
@@ -130,7 +146,7 @@ impl Moxidle {
             .collect();
 
         Ok(Self {
-            state: Arc::new(RwLock::new(State::default())),
+            state: Arc::new(RwLock::new(State::new(emit_sender))),
             power: Power::default(),
             timeouts,
             config: general_config,
@@ -200,11 +216,9 @@ impl Moxidle {
 
                 let mut state = self.state.write().await;
                 if locked {
-                    state.active_since.get_or_insert(Instant::now());
-                    state.lock_state = LockState::Locked;
+                    state.set_lock_state(LockState::Locked).await;
                 } else {
-                    state.active_since = None;
-                    state.lock_state = LockState::Unlocked;
+                    state.set_lock_state(LockState::Unlocked).await;
                 }
             }
             Event::ScreenSaverLock => {
@@ -214,10 +228,7 @@ impl Moxidle {
                         execute_command(lock_cmd).await;
                     });
                     let mut state = self.state.write().await;
-                    if state.active_since.is_none() {
-                        state.active_since = Some(Instant::now());
-                    }
-                    state.lock_state = LockState::Locked;
+                    state.set_lock_state(LockState::Locked).await;
                 }
             }
             Event::PrepareForSleep(sleep) => {
@@ -269,7 +280,7 @@ impl Moxidle {
                         (),
                     ));
 
-                    log::info!(
+                    log::debug!(
                         "Notification created\ntimeout: {}\non_timeout: {:?}\non_resume: {:?}",
                         handler.timeout,
                         handler.on_timeout,
@@ -278,7 +289,7 @@ impl Moxidle {
                 }
             } else if let Some(notification) = handler.notification.take() {
                 notification.destroy();
-                log::info!(
+                log::debug!(
                     "Notification destroyed\ntimeout: {}\non_timeout: {:?}\non_resume: {:?}",
                     handler.timeout,
                     handler.on_timeout,
@@ -307,6 +318,8 @@ async fn execute_command(command: Arc<str>) {
     match Command::new("/bin/sh")
         .arg("-c")
         .arg(&*command)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .status()
         .await
     {
@@ -347,18 +360,12 @@ impl Dispatch<ext_idle_notification_v1::ExtIdleNotificationV1, ()> for Moxidle {
                     tokio::spawn(async move {
                         execute_command(cmd).await;
                         let mut state = state.write().await;
-                        if state.active_since.is_none() {
-                            state.active_since = Some(Instant::now());
-                        }
-                        state.lock_state = LockState::Locked;
+                        state.set_lock_state(LockState::Locked).await;
                     });
                 } else {
                     tokio::spawn(async move {
                         let mut state = state.write().await;
-                        if state.active_since.is_none() {
-                            state.active_since = Some(Instant::now());
-                        }
-                        state.lock_state = LockState::Locked;
+                        state.set_lock_state(LockState::Locked).await;
                     });
                 }
             }
@@ -370,14 +377,12 @@ impl Dispatch<ext_idle_notification_v1::ExtIdleNotificationV1, ()> for Moxidle {
                     tokio::spawn(async move {
                         execute_command(cmd).await;
                         let mut state = state.write().await;
-                        state.active_since = None;
-                        state.lock_state = LockState::Unlocked;
+                        state.set_lock_state(LockState::Unlocked).await;
                     });
                 } else {
                     tokio::spawn(async move {
                         let mut state = state.write().await;
-                        state.active_since = None;
-                        state.lock_state = LockState::Unlocked;
+                        state.set_lock_state(LockState::Unlocked).await;
                     });
                 }
             }
@@ -448,12 +453,13 @@ async fn main() -> Result<()> {
     let qh = event_queue.handle();
 
     let mut event_loop = EventLoop::try_new()?;
-    let mut moxidle = Moxidle::new(globals, qh, cli.config)?;
+    let (emit_sender, emit_receiver) = tokio::sync::mpsc::channel(1);
+    let mut moxidle = Moxidle::new(globals, qh, cli.config, emit_sender)?;
 
     WaylandSource::new(conn, event_queue).insert(event_loop.handle())?;
 
     let (executor, scheduler) = calloop::futures::executor()?;
-    let (event_sender, event_receiver) = channel::channel();
+    let (event_sender, event_receiver) = calloop::channel::channel();
 
     let dbus_conn = Arc::new(zbus::Connection::system().await?);
     {
@@ -494,7 +500,9 @@ async fn main() -> Result<()> {
         let ignore_dbus_inhibit = moxidle.ignore_dbus_inhibit;
         let event_sender = event_sender.clone();
         scheduler.schedule(async move {
-            if let Err(e) = screensaver::serve(event_sender, ignore_dbus_inhibit, state).await {
+            if let Err(e) =
+                screensaver::serve(event_sender, emit_receiver, ignore_dbus_inhibit, state).await
+            {
                 log::error!("D-Bus screensaver error: {}", e);
             }
         })?;
@@ -524,10 +532,11 @@ async fn main() -> Result<()> {
     event_loop
         .handle()
         .insert_source(executor, |_: (), _, _| ())?;
+
     event_loop
         .handle()
         .insert_source(event_receiver, |event, _, state| {
-            if let channel::Event::Msg(event) = event {
+            if let calloop::channel::Event::Msg(event) = event {
                 pollster::block_on(state.handle_app_event(event));
             }
         })?;

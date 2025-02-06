@@ -30,7 +30,7 @@ struct ScreenSaver {
 #[zbus::interface(name = "org.freedesktop.ScreenSaver")]
 impl ScreenSaver {
     #[zbus(signal)]
-    async fn active_changed(&mut self, signal_emitter: &SignalEmitter<'_>) -> zbus::Result<()>;
+    async fn active_changed(signal_emitter: &SignalEmitter<'_>) -> zbus::Result<()>;
 
     async fn lock(&self) {
         log::info!("Sending SessionLocked(true) event");
@@ -128,7 +128,7 @@ impl ScreenSaver {
         reason_for_inhibit: &str,
         #[zbus(header)] header: zbus::message::Header<'_>,
     ) -> u32 {
-        // TODO
+        // TODO: If anyone tells me what it's supposed to do I'd be happy to implement
         _ = header;
         _ = application_name;
         _ = reason_for_inhibit;
@@ -137,13 +137,14 @@ impl ScreenSaver {
     }
 
     async fn un_throttle(&mut self, cookie: u32) {
-        // TODO
+        // TODO: If anyone tells me what it's supposed to do I'd be happy to implement
         _ = cookie;
     }
 }
 
 pub async fn serve(
     event_sender: channel::Sender<Event>,
+    mut emit_receiver: tokio::sync::mpsc::Receiver<()>,
     ignore_dbus_inhibit: bool,
     state: Arc<RwLock<State>>,
 ) -> zbus::Result<()> {
@@ -160,9 +161,12 @@ pub async fn serve(
         last_cookie: Arc::new(AtomicU32::new(0)),
     };
 
-    let conn = zbus::connection::Builder::session()?
-        .serve_at("/ScreenSaver", screensaver.clone())?
-        .serve_at("/org/freedesktop/ScreenSaver", screensaver.clone())?
+    let paths = ["/ScreenSaver", "/org/freedesktop/ScreenSaver"];
+    let conn = paths
+        .iter()
+        .try_fold(zbus::connection::Builder::session()?, |builder, &path| {
+            builder.serve_at(path, screensaver.clone())
+        })?
         .build()
         .await?;
 
@@ -174,27 +178,40 @@ pub async fn serve(
 
     let dbus = zbus::fdo::DBusProxy::new(&conn).await?;
     let mut name_owner_stream = dbus.receive_name_owner_changed().await?;
-    while let Some(event) = name_owner_stream.next().await {
-        if let Ok(args) = event.args() {
-            if args.new_owner.is_none() {
-                if let zbus::names::BusName::Unique(name) = args.name {
-                    let mut inhibitors = inhibitors.lock().await;
-                    if !inhibitors.is_empty() {
-                        inhibitors.retain(|inhibitor| inhibitor.client != name);
-                        if inhibitors.is_empty() {
-                            log::info!("Sending ScreenSaverInhibit(false) event");
-                            if let Err(e) = event_sender.send(Event::ScreenSaverInhibit(false)) {
-                                log::error!(
-                                    "Failed to send ScreenSaverInhibit(false) event: {}",
-                                    e
-                                );
+    tokio::spawn(async move {
+        while let Some(event) = name_owner_stream.next().await {
+            if let Ok(args) = event.args() {
+                if args.new_owner.is_none() {
+                    if let zbus::names::BusName::Unique(name) = args.name {
+                        let mut inhibitors = inhibitors.lock().await;
+                        if !inhibitors.is_empty() {
+                            inhibitors.retain(|inhibitor| inhibitor.client != name);
+                            if inhibitors.is_empty() {
+                                log::info!("Sending ScreenSaverInhibit(false) event");
+                                if let Err(e) = event_sender.send(Event::ScreenSaverInhibit(false))
+                                {
+                                    log::error!(
+                                        "Failed to send ScreenSaverInhibit(false) event: {}",
+                                        e
+                                    );
+                                }
                             }
                         }
                     }
                 }
             }
         }
-    }
+    });
 
-    Ok(())
+    let iface = conn
+        .object_server()
+        .interface::<_, ScreenSaver>("/org/freedesktop/ScreenSaver")
+        .await?;
+
+    loop {
+        emit_receiver.recv().await;
+        if let Err(e) = ScreenSaver::active_changed(iface.signal_emitter()).await {
+            log::error!("Failed to emit active changed event: {}", e);
+        }
+    }
 }

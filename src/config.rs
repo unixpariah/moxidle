@@ -1,6 +1,6 @@
 use mlua::{Lua, LuaSerdeExt};
 use serde::{Deserialize, Deserializer};
-use std::{fs, path::PathBuf, rc::Rc, sync::Arc};
+use std::{fs, path::PathBuf, sync::Arc};
 
 use crate::upower::{BatteryLevel, BatteryState};
 
@@ -178,7 +178,7 @@ where
 #[derive(Deserialize)]
 pub struct TimeoutConfig {
     #[serde(default)]
-    pub conditions: Rc<[Condition]>,
+    pub conditions: Arc<[Condition]>,
     pub timeout: u32,
     pub on_timeout: Option<Arc<str>>,
     pub on_resume: Option<Arc<str>>,

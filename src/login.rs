@@ -33,7 +33,7 @@ trait LoginSession {
 async fn handle_block_inhibited(value: &str, sender: &channel::Sender<Event>) {
     log::info!("Sending BlockInhibited event");
     if let Err(e) = sender.send(Event::BlockInhibited(value.to_string())) {
-        log::warn!("Failed to send BlockInhibited event: {}", e);
+        log::error!("Failed to send BlockInhibited event: {}", e);
     }
 }
 
@@ -52,7 +52,7 @@ pub async fn serve(
     {
         Ok(session) => session,
         Err(e) => {
-            log::warn!("Couldn't create session proxy: {}", e);
+            log::error!("Couldn't create session proxy: {}", e);
             return Ok(());
         }
     };
@@ -89,7 +89,7 @@ pub async fn serve(
             while lock_stream.next().await.is_some() {
                 log::info!("Sending SessionLocked(true) event");
                 if let Err(e) = event_sender.send(Event::SessionLocked(true)) {
-                    log::info!("Failed to get unlock args: {}", e)
+                    log::error!("Failed to send SessionLocked(true) event: {}", e)
                 }
             }
         });
@@ -101,7 +101,7 @@ pub async fn serve(
             while unlock_stream.next().await.is_some() {
                 log::info!("Sending SessionLocked(false) event");
                 if let Err(e) = event_sender.send(Event::SessionLocked(false)) {
-                    log::info!("Failed to get unlock args: {}", e)
+                    log::error!("Failed to send SessionLocked(false) event: {}", e)
                 }
             }
         });
@@ -115,7 +115,7 @@ pub async fn serve(
                     let start = *sleep.start();
                     log::info!("Sending PrepareForSleep({}) event", start);
                     if let Err(e) = event_sender.send(Event::PrepareForSleep(start)) {
-                        log::info!("Failed to get sleep args: {}", e)
+                        log::error!("Failed to send PrepareForSleep({}) event: {}", start, e)
                     }
                 }
             }
