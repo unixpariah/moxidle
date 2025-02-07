@@ -11,7 +11,7 @@ use config::Condition;
 use config::{Config, MoxidleConfig, TimeoutConfig};
 use env_logger::Builder;
 use log::LevelFilter;
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::{error::Error, ops::Deref, path::PathBuf, sync::Arc, time::Instant};
 use tokio::sync::oneshot;
@@ -78,6 +78,8 @@ enum LockState {
 }
 
 struct State {
+    // Notification used to detect when system should resume after being locked externally.
+    notification: Option<ext_idle_notification_v1::ExtIdleNotificationV1>,
     lock_state: LockState,
     active_since: Option<Instant>,
     emit_sender: mpsc::Sender<()>,
@@ -86,6 +88,7 @@ struct State {
 impl State {
     fn new(emit_sender: mpsc::Sender<()>) -> Self {
         Self {
+            notification: None,
             active_since: None,
             lock_state: LockState::Unlocked,
             emit_sender,
@@ -228,8 +231,18 @@ impl Moxidle {
 
                 if locked {
                     self.state.set_lock_state(LockState::Locked);
+                    if self.state.notification.is_none() {
+                        self.state.notification =
+                            Some(
+                                self.notifier
+                                    .get_idle_notification(0, &self.seat, &self.qh, ()),
+                            );
+                    }
                 } else {
                     self.state.set_lock_state(LockState::Unlocked);
+                    if let Some(notification) = self.state.notification.take() {
+                        notification.destroy();
+                    }
                 }
             }
             Event::ScreenSaverLock => {
@@ -237,6 +250,13 @@ impl Moxidle {
                     let lock_cmd = lock_cmd.clone();
                     execute_command(lock_cmd);
                     self.state.set_lock_state(LockState::Locked);
+                    if self.state.notification.is_none() {
+                        self.state.notification =
+                            Some(
+                                self.notifier
+                                    .get_idle_notification(0, &self.seat, &self.qh, ()),
+                            );
+                    }
                 }
             }
             Event::PrepareForSleep(sleep) => {
@@ -326,6 +346,8 @@ fn execute_command(command: Arc<str>) {
     let mut child = match Command::new("/bin/sh")
         .arg("-c")
         .arg(command.as_ref())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .spawn()
     {
         Ok(child) => child,
@@ -353,6 +375,16 @@ impl Dispatch<ext_idle_notification_v1::ExtIdleNotificationV1, ()> for Moxidle {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
+        // This is for detecting when session is resumed after being locked externally
+        if let Some(notification) = state.state.notification.take() {
+            if let ext_idle_notification_v1::Event::Resumed = event {
+                state.state.set_lock_state(LockState::Unlocked);
+            } else {
+                state.state.notification = Some(notification);
+            }
+            return;
+        }
+
         let Some(handler) = state
             .timeouts
             .iter()
