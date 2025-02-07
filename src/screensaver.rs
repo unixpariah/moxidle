@@ -1,14 +1,14 @@
 // https://specifications.freedesktop.org/idle-inhibit-spec/latest
 // https://invent.kde.org/plasma/kscreenlocker/-/blob/master/dbus/org.freedesktop.ScreenSaver.xml
 
-use crate::{Event, LockState, State};
+use crate::{Event, LockState};
 use calloop::channel;
 use futures_lite::StreamExt;
 use std::sync::{
     atomic::{AtomicU32, Ordering},
-    Arc,
+    mpsc, Arc,
 };
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::{oneshot, Mutex};
 use zbus::object_server::SignalEmitter;
 
 #[derive(Debug)]
@@ -21,7 +21,6 @@ struct Inhibitor {
 
 #[derive(Clone)]
 struct ScreenSaver {
-    state: Arc<RwLock<State>>,
     inhibitors: Arc<Mutex<Vec<Inhibitor>>>,
     last_cookie: Arc<AtomicU32>,
     event_sender: channel::Sender<Event>,
@@ -47,15 +46,21 @@ impl ScreenSaver {
     }
 
     async fn get_active(&self) -> bool {
-        self.state.read().await.lock_state == LockState::Locked
+        let (response_tx, response_rx) = oneshot::channel();
+        if let Err(e) = self.event_sender.send(Event::GetLockState(response_tx)) {
+            log::error!("Failed to send GetActiveTime request: {e}");
+            return false;
+        }
+        response_rx.await.unwrap_or(LockState::Unlocked) == LockState::Locked
     }
 
     async fn get_active_time(&self) -> u32 {
-        if let Some(time) = self.state.read().await.active_since {
-            time.elapsed().as_secs() as u32
-        } else {
-            0
+        let (response_tx, response_rx) = oneshot::channel();
+        if let Err(e) = self.event_sender.send(Event::GetActiveTime(response_tx)) {
+            log::error!("Failed to send GetActiveTime request: {e}");
+            return 0;
         }
+        response_rx.await.unwrap_or(0)
     }
 
     async fn get_session_idle_time(&self) -> zbus::fdo::Result<u32> {
@@ -144,9 +149,8 @@ impl ScreenSaver {
 
 pub async fn serve(
     event_sender: channel::Sender<Event>,
-    mut emit_receiver: tokio::sync::mpsc::Receiver<()>,
+    emit_receiver: mpsc::Receiver<()>,
     ignore_dbus_inhibit: bool,
-    state: Arc<RwLock<State>>,
 ) -> zbus::Result<()> {
     if ignore_dbus_inhibit {
         return Ok(());
@@ -155,7 +159,6 @@ pub async fn serve(
     let inhibitors = Arc::new(Mutex::new(Vec::new()));
 
     let screensaver = ScreenSaver {
-        state,
         inhibitors: Arc::clone(&inhibitors),
         event_sender: event_sender.clone(),
         last_cookie: Arc::new(AtomicU32::new(0)),
@@ -208,10 +211,16 @@ pub async fn serve(
         .interface::<_, ScreenSaver>("/org/freedesktop/ScreenSaver")
         .await?;
 
-    loop {
-        emit_receiver.recv().await;
-        if let Err(e) = ScreenSaver::active_changed(iface.signal_emitter()).await {
-            log::error!("Failed to emit active changed event: {}", e);
+    tokio::spawn(async move {
+        loop {
+            if let Err(e) = emit_receiver.recv() {
+                log::error!("Failed to receive emit event: {e}");
+            }
+            if let Err(e) = ScreenSaver::active_changed(iface.signal_emitter()).await {
+                log::error!("Failed to emit active changed event: {}", e);
+            }
         }
-    }
+    });
+
+    Ok(())
 }

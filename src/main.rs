@@ -11,10 +11,10 @@ use config::Condition;
 use config::{Config, MoxidleConfig, TimeoutConfig};
 use env_logger::Builder;
 use log::LevelFilter;
-use std::process::Stdio;
+use std::process::Command;
+use std::sync::mpsc;
 use std::{error::Error, ops::Deref, path::PathBuf, sync::Arc, time::Instant};
-use tokio::process::Command;
-use tokio::sync::RwLock;
+use tokio::sync::oneshot;
 use upower::{BatteryLevel, BatteryState, LevelComparison, Power, PowerSource};
 use wayland_client::{
     delegate_noop,
@@ -71,7 +71,7 @@ impl Inhibitors {
     }
 }
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Copy, Clone)]
 enum LockState {
     Locked,
     Unlocked,
@@ -80,11 +80,11 @@ enum LockState {
 struct State {
     lock_state: LockState,
     active_since: Option<Instant>,
-    emit_sender: tokio::sync::mpsc::Sender<()>,
+    emit_sender: mpsc::Sender<()>,
 }
 
 impl State {
-    fn new(emit_sender: tokio::sync::mpsc::Sender<()>) -> Self {
+    fn new(emit_sender: mpsc::Sender<()>) -> Self {
         Self {
             active_since: None,
             lock_state: LockState::Unlocked,
@@ -92,9 +92,9 @@ impl State {
         }
     }
 
-    async fn set_lock_state(&mut self, lock_state: LockState) {
+    fn set_lock_state(&mut self, lock_state: LockState) {
         if self.lock_state != lock_state {
-            if let Err(e) = self.emit_sender.send(()).await {
+            if let Err(e) = self.emit_sender.send(()) {
                 log::error!("Failed to send emit event: {e}");
             }
             self.lock_state = lock_state;
@@ -106,7 +106,7 @@ impl State {
 }
 
 struct Moxidle {
-    state: Arc<RwLock<State>>,
+    state: State,
     seat: wl_seat::WlSeat,
     notifier: ext_idle_notifier_v1::ExtIdleNotifierV1,
     timeouts: Vec<TimeoutHandler>,
@@ -129,7 +129,7 @@ impl Moxidle {
         globals: GlobalList,
         qh: QueueHandle<Self>,
         config_path: Option<PathBuf>,
-        emit_sender: tokio::sync::mpsc::Sender<()>,
+        emit_sender: mpsc::Sender<()>,
     ) -> Result<Self> {
         let notifier = globals
             .bind(&qh, 1..=1, ())
@@ -146,7 +146,7 @@ impl Moxidle {
             .collect();
 
         Ok(Self {
-            state: Arc::new(RwLock::new(State::new(emit_sender))),
+            state: State::new(emit_sender),
             power: Power::default(),
             timeouts,
             config: general_config,
@@ -167,8 +167,22 @@ impl Moxidle {
             .any(|timeout| timeout.config.conditions.iter().any(&condition_predicate))
     }
 
-    async fn handle_app_event(&mut self, event: Event) {
+    fn handle_app_event(&mut self, event: Event) {
         match event {
+            Event::GetLockState(sender) => {
+                if sender.send(self.state.lock_state).is_err() {
+                    log::error!("Failed to send lock state");
+                }
+            }
+            Event::GetActiveTime(sender) => {
+                if let Some(time) = self.state.active_since {
+                    if sender.send(time.elapsed().as_secs() as u32).is_err() {
+                        log::error!("Failed to send lock active time");
+                    }
+                } else if sender.send(0).is_err() {
+                    log::error!("Failed to send lock active time");
+                }
+            }
             Event::BatteryState(state) => {
                 self.power.update_state(state);
                 self.reset_idle_timers();
@@ -209,26 +223,20 @@ impl Moxidle {
 
                 if let Some(cmd) = cmd {
                     let cmd = cmd.clone();
-                    tokio::spawn(async move {
-                        execute_command(cmd).await;
-                    });
+                    execute_command(cmd);
                 }
 
-                let mut state = self.state.write().await;
                 if locked {
-                    state.set_lock_state(LockState::Locked).await;
+                    self.state.set_lock_state(LockState::Locked);
                 } else {
-                    state.set_lock_state(LockState::Unlocked).await;
+                    self.state.set_lock_state(LockState::Unlocked);
                 }
             }
             Event::ScreenSaverLock => {
                 if let Some(lock_cmd) = self.lock_cmd.as_ref() {
                     let lock_cmd = lock_cmd.clone();
-                    tokio::spawn(async move {
-                        execute_command(lock_cmd).await;
-                    });
-                    let mut state = self.state.write().await;
-                    state.set_lock_state(LockState::Locked).await;
+                    execute_command(lock_cmd);
+                    self.state.set_lock_state(LockState::Locked);
                 }
             }
             Event::PrepareForSleep(sleep) => {
@@ -240,9 +248,7 @@ impl Moxidle {
 
                 if let Some(cmd) = cmd {
                     let cmd = cmd.clone();
-                    tokio::spawn(async move {
-                        execute_command(cmd).await;
-                    });
+                    execute_command(cmd);
                 }
             }
         }
@@ -301,6 +307,8 @@ impl Moxidle {
 }
 
 enum Event {
+    GetActiveTime(oneshot::Sender<u32>),
+    GetLockState(oneshot::Sender<LockState>),
     BatteryState(BatteryState),
     BatteryLevel(BatteryLevel),
     OnBattery(bool),
@@ -314,24 +322,26 @@ enum Event {
     AudioInhibit(bool),
 }
 
-async fn execute_command(command: Arc<str>) {
-    match Command::new("/bin/sh")
+fn execute_command(command: Arc<str>) {
+    let mut child = match Command::new("/bin/sh")
         .arg("-c")
-        .arg(&*command)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .await
+        .arg(command.as_ref())
+        .spawn()
     {
+        Ok(child) => child,
+        Err(err) => {
+            log::error!("failed to execute command '{}': {}", command, err);
+            return;
+        }
+    };
+
+    std::thread::spawn(move || match child.wait() {
+        Ok(status) if status.success() => {}
         Ok(status) => {
-            if !status.success() {
-                log::error!("command '{}' failed with exit status {}", command, status);
-            }
+            log::error!("command '{}' failed with exit status {}", command, status)
         }
-        Err(e) => {
-            log::error!("Command '{}' failed {}", command, e);
-        }
-    }
+        Err(err) => log::error!("failed to wait on command '{}': {}", command, err),
+    });
 }
 
 impl Dispatch<ext_idle_notification_v1::ExtIdleNotificationV1, ()> for Moxidle {
@@ -353,38 +363,18 @@ impl Dispatch<ext_idle_notification_v1::ExtIdleNotificationV1, ()> for Moxidle {
 
         match event {
             ext_idle_notification_v1::Event::Idled => {
-                let state = state.state.clone();
                 if let Some(cmd) = handler.on_timeout() {
                     log::info!("Executing timeout command: {}", cmd);
-                    let cmd = cmd.clone();
-                    tokio::spawn(async move {
-                        execute_command(cmd).await;
-                        let mut state = state.write().await;
-                        state.set_lock_state(LockState::Locked).await;
-                    });
-                } else {
-                    tokio::spawn(async move {
-                        let mut state = state.write().await;
-                        state.set_lock_state(LockState::Locked).await;
-                    });
+                    execute_command(cmd.clone());
                 }
+                state.state.set_lock_state(LockState::Locked);
             }
             ext_idle_notification_v1::Event::Resumed => {
-                let state = state.state.clone();
                 if let Some(cmd) = handler.on_resume() {
                     log::info!("Executing resume command: {}", cmd);
-                    let cmd = cmd.clone();
-                    tokio::spawn(async move {
-                        execute_command(cmd).await;
-                        let mut state = state.write().await;
-                        state.set_lock_state(LockState::Unlocked).await;
-                    });
-                } else {
-                    tokio::spawn(async move {
-                        let mut state = state.write().await;
-                        state.set_lock_state(LockState::Unlocked).await;
-                    });
+                    execute_command(cmd.clone());
                 }
+                state.state.set_lock_state(LockState::Unlocked);
             }
             _ => (),
         }
@@ -453,7 +443,7 @@ async fn main() -> Result<()> {
     let qh = event_queue.handle();
 
     let mut event_loop = EventLoop::try_new()?;
-    let (emit_sender, emit_receiver) = tokio::sync::mpsc::channel(1);
+    let (emit_sender, emit_receiver) = mpsc::channel();
     let mut moxidle = Moxidle::new(globals, qh, cli.config, emit_sender)?;
 
     WaylandSource::new(conn, event_queue).insert(event_loop.handle())?;
@@ -496,12 +486,11 @@ async fn main() -> Result<()> {
     }
 
     {
-        let state = moxidle.state.clone();
         let ignore_dbus_inhibit = moxidle.ignore_dbus_inhibit;
         let event_sender = event_sender.clone();
         scheduler.schedule(async move {
             if let Err(e) =
-                screensaver::serve(event_sender, emit_receiver, ignore_dbus_inhibit, state).await
+                screensaver::serve(event_sender, emit_receiver, ignore_dbus_inhibit).await
             {
                 log::error!("D-Bus screensaver error: {}", e);
             }
@@ -537,7 +526,7 @@ async fn main() -> Result<()> {
         .handle()
         .insert_source(event_receiver, |event, _, state| {
             if let calloop::channel::Event::Msg(event) = event {
-                pollster::block_on(state.handle_app_event(event));
+                state.handle_app_event(event);
             }
         })?;
 
