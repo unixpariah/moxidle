@@ -30,7 +30,7 @@ return {
   },
   timeouts = {
     {
-      conditions = { "on_battery", { ["battery_below"] = 20 } }, -- Conditions needed to be fullfilled for timeout to launch
+      conditions = { "on_battery", { battery_below = 20 } }, -- Conditions needed to be fullfilled for timeout to launch
       timeout = 300, -- Idle timeout in seconds
       on_timeout = "systemctl suspend", -- Command executed on timeout
       on_resume = "notify-send 'Welcome back!'", -- Command executed on user activity
@@ -47,17 +47,16 @@ return {
 
 You can define multiple timeout rules. If `on_timeout` or `on_resume` is omitted, those events will be ignored.
 
+Run `man 5 moxidle` for more information
+
 ## Dependencies  
 
-### Build-time  
 - **Lua** 5.4  
 - **Rust**  
 - **dbus**
-- **libpulseaudio** (Optional, required if audio features are enabled)  
-
-### Runtime  
 - **wayland**  
 - **upower** (Optional, required if battery-related conditions are set)  
+- **libpulseaudio** (Optional, required if audio features are enabled)  
 
 ## Building  
 

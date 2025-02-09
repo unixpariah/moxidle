@@ -2,12 +2,12 @@
 WantedBy=graphical-session.target
 
 [Service]
-Type=simple
 ExecStart=@CARGO_INSTALL_ROOT@/bin/moxidle
-Restart=on-failure
+Restart=always
+RestartSec=10
 
 [Unit]
-Description=moxidle daemon
-PartOf=graphical-session.target
 After=graphical-session.target
 ConditionEnvironment=WAYLAND_DISPLAY
+Description=moxidle daemon
+PartOf=graphical-session.target

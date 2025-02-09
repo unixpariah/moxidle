@@ -95,6 +95,8 @@ in
       '';
     };
 
+    home.packages = [ cfg.package ];
+
     systemd.user.services.moxidle = {
       Install = {
         WantedBy = [ config.wayland.systemd.target ];
@@ -112,18 +114,6 @@ in
         ExecStart = "${lib.getExe cfg.package}";
         Restart = "always";
         RestartSec = "10";
-        Environment = [
-          "PATH=${
-            lib.makeBinPath (
-              with pkgs;
-              [
-                systemd
-                libnotify
-              ]
-            )
-          }"
-          "LD_LIBRARY_PATH=${lib.makeLibraryPath [ pkgs.libpulseaudio ]}"
-        ];
       };
     };
   };

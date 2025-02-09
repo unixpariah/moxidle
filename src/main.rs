@@ -283,23 +283,22 @@ impl Moxidle {
     }
 
     fn reset_idle_timers(&mut self) {
-        let power = &self.power;
         self.timeouts.iter_mut().for_each(|handler| {
             let current_met = if !self.inhibitors.active() {
                 handler.conditions.iter().all(|condition| match condition {
-                    Condition::OnBattery => power.source() == &PowerSource::Battery,
-                    Condition::OnAc => power.source() == &PowerSource::Plugged,
+                    Condition::OnBattery => self.power.source() == &PowerSource::Battery,
+                    Condition::OnAc => self.power.source() == &PowerSource::Plugged,
                     Condition::BatteryBelow(battery) => {
-                        power.level_cmp(battery) == LevelComparison::Below
+                        self.power.level_cmp(battery) == LevelComparison::Below
                     }
                     Condition::BatteryAbove(battery) => {
-                        power.level_cmp(battery) == LevelComparison::Above
+                        self.power.level_cmp(battery) == LevelComparison::Above
                     }
                     Condition::BatteryEqual(battery) => {
-                        power.level_cmp(battery) == LevelComparison::Equal
+                        self.power.level_cmp(battery) == LevelComparison::Equal
                     }
-                    Condition::BatteryLevel(level) => power.level() == level,
-                    Condition::BatteryState(state) => power.state() == state,
+                    Condition::BatteryLevel(level) => self.power.level() == level,
+                    Condition::BatteryState(state) => self.power.state() == state,
                 })
             } else {
                 false

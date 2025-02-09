@@ -17,7 +17,6 @@ zbus = "5.3.1"
 tokio = { version = "1.43.0", features = ["process", "macros", "rt-multi-thread", "sync"] }
 libpulse-binding = { version = "2.28.2", optional = true }
 clap = { version = "4.5.27", features = ["derive"] }
-pollster = "0.4.0"
 serde_repr = "0.1.19"
 
 [features]

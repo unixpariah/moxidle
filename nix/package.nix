@@ -4,6 +4,8 @@
   libpulseaudio,
   lib,
   rustPlatform,
+  installShellFiles,
+  scdoc,
 }:
 let
   cargoToml = builtins.fromTOML (builtins.readFile ../Cargo.toml);
@@ -13,25 +15,40 @@ rustPlatform.buildRustPackage {
   version = "${cargoToml.package.version}";
   cargoLock.lockFile = ../Cargo.lock;
   src = lib.fileset.toSource {
-    root = ../.;
-    fileset = lib.fileset.intersection (lib.fileset.fromSource (lib.sources.cleanSource ../.)) (
+    root = ./..;
+    fileset = lib.fileset.intersection (lib.fileset.fromSource (lib.sources.cleanSource ./..)) (
       lib.fileset.unions [
         ../src
         ../Cargo.toml
         ../Cargo.lock
+        ../doc
+        ../completions
       ]
     );
   };
 
-  nativeBuildInputs = [ pkg-config ];
+  nativeBuildInputs = [
+    pkg-config
+    scdoc
+  ];
 
   buildInputs = [
     lua5_4
     libpulseaudio
+    installShellFiles
   ];
 
-  configurePhase = ''
-    export PKG_CONFIG_PATH=${lua5_4}/lib/pkgconfig:${libpulseaudio}/lib/pkgconfig
+  postInstall = ''
+    for f in doc/*.scd; do
+      local page="doc/$(basename "$f" .scd)"
+      scdoc < "$f" > "$page"
+      installManPage "$page"
+    done
+
+    installShellCompletion --cmd moxidle \
+      --bash completions/moxidle.bash \
+      --fish completions/moxidle.fish \
+      --zsh completions/_moxidle
   '';
 
   meta = with lib; {
