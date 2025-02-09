@@ -1,3 +1,4 @@
+#[cfg(feature = "audio")]
 mod audio;
 mod config;
 mod login;
@@ -60,6 +61,7 @@ impl TimeoutHandler {
 
 #[derive(Default)]
 struct Inhibitors {
+    #[cfg(feature = "audio")]
     audio_inhibitor: bool,
     dbus_inhibitor: bool,
     systemd_inhibitor: bool,
@@ -67,7 +69,12 @@ struct Inhibitors {
 
 impl Inhibitors {
     fn active(&self) -> bool {
-        self.dbus_inhibitor || self.audio_inhibitor || self.systemd_inhibitor
+        let mut active = self.dbus_inhibitor || self.systemd_inhibitor;
+        #[cfg(feature = "audio")]
+        {
+            active |= self.audio_inhibitor;
+        }
+        active
     }
 }
 
@@ -209,6 +216,7 @@ impl Moxidle {
                 self.inhibitors.dbus_inhibitor = inhibited;
                 self.reset_idle_timers();
             }
+            #[cfg(feature = "audio")]
             Event::AudioInhibit(inhibited) => {
                 self.inhibitors.audio_inhibitor = inhibited;
                 self.reset_idle_timers();
@@ -339,6 +347,7 @@ enum Event {
     ScreenSaverLock,
     BlockInhibited(String),
     PrepareForSleep(bool),
+    #[cfg(feature = "audio")]
     AudioInhibit(bool),
 }
 
@@ -540,6 +549,7 @@ async fn main() -> Result<()> {
         })?;
     }
 
+    #[cfg(feature = "audio")]
     {
         let ignore_audio_inhibit = moxidle.ignore_audio_inhibit;
         let event_sender = event_sender.clone();

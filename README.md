@@ -66,6 +66,18 @@ To build with default features:
 cargo build --release
 ```
 
+### Custom Build
+
+To disable libpulseaudio dependency, run:
+
+```sh
+cargo build --no-default-features
+```
+
+### Feature Flags
+
+- `audio` – Enables audio integration
+
 ## Installation
 
 ```sh

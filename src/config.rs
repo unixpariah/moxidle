@@ -48,6 +48,7 @@ pub struct MoxidleConfig {
     #[serde(default)]
     pub ignore_systemd_inhibit: bool,
     #[serde(default)]
+    #[cfg(feature = "audio")]
     pub ignore_audio_inhibit: bool,
 }
 
