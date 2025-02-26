@@ -206,17 +206,23 @@ pub async fn serve(
         }
     });
 
-    let iface = conn
-        .object_server()
-        .interface::<_, ScreenSaver>("/org/freedesktop/ScreenSaver")
-        .await?;
+    let interfaces = tokio::try_join!(
+        conn.object_server()
+            .interface::<_, ScreenSaver>("/org/freedesktop/ScreenSaver"),
+        conn.object_server()
+            .interface::<_, ScreenSaver>("/ScreenSaver"),
+    )?;
 
     tokio::spawn(async move {
         loop {
             if let Err(e) = emit_receiver.recv() {
                 log::error!("Failed to receive emit event: {e}");
             }
-            if let Err(e) = ScreenSaver::active_changed(iface.signal_emitter()).await {
+
+            if let Err(e) = tokio::try_join!(
+                ScreenSaver::active_changed(interfaces.0.signal_emitter()),
+                ScreenSaver::active_changed(interfaces.1.signal_emitter())
+            ) {
                 log::error!("Failed to emit active changed event: {}", e);
             }
         }

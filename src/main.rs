@@ -387,10 +387,9 @@ impl Dispatch<ext_idle_notification_v1::ExtIdleNotificationV1, ()> for Moxidle {
         if let Some(notification) = state.state.notification.take() {
             if let ext_idle_notification_v1::Event::Resumed = event {
                 state.state.set_lock_state(LockState::Unlocked);
-            } else {
-                state.state.notification = Some(notification);
+                return;
             }
-            return;
+            state.state.notification = Some(notification);
         }
 
         let Some(handler) = state
