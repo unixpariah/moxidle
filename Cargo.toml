@@ -1,7 +1,7 @@
 [package]
 name = "moxidle"
 version = "1.0.0"
-edition = "2021"
+edition = "2024"
 
 [dependencies]
 calloop = { version = "0.14.2", features = [ "executor" ] }

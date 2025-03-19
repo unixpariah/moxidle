@@ -55,7 +55,7 @@ rustPlatform.buildRustPackage {
     description = "Idle daemon with conditional timeouts and built-in audio inhibitor";
     mainProgram = "moxidle";
     homepage = "https://github.com/unixpariah/moxidle";
-    license = licenses.gpl3;
+    license = licenses.mit;
     maintainers = with maintainers; [ unixpariah ];
     platforms = platforms.unix;
   };
