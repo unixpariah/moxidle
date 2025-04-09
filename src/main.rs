@@ -475,7 +475,7 @@ async fn main() -> Result<()> {
         };
     });
 
-    Builder::new().filter_level(log_level).init();
+    Builder::new().filter(Some("moxidle"), log_level).init();
 
     let conn = Connection::connect_to_env()?;
     let (globals, event_queue) = registry_queue_init(&conn)?;

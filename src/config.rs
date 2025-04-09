@@ -1,8 +1,7 @@
+use crate::upower::{BatteryLevel, BatteryState};
 use mlua::{Lua, LuaSerdeExt};
 use serde::{Deserialize, Deserializer};
 use std::{fs, path::PathBuf, sync::Arc};
-
-use crate::upower::{BatteryLevel, BatteryState};
 
 #[derive(Deserialize)]
 pub struct Config {
@@ -37,17 +36,15 @@ impl Config {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Default)]
+#[serde(default)]
 pub struct MoxidleConfig {
     pub lock_cmd: Option<Arc<str>>,
     pub unlock_cmd: Option<Arc<str>>,
     pub before_sleep_cmd: Option<Arc<str>>,
     pub after_sleep_cmd: Option<Arc<str>>,
-    #[serde(default)]
     pub ignore_dbus_inhibit: bool,
-    #[serde(default)]
     pub ignore_systemd_inhibit: bool,
-    #[serde(default)]
     #[cfg(feature = "audio")]
     pub ignore_audio_inhibit: bool,
 }
@@ -191,7 +188,7 @@ where
 #[derive(Deserialize)]
 pub struct TimeoutConfig {
     #[serde(default)]
-    pub conditions: Arc<[Condition]>,
+    pub conditions: Box<[Condition]>,
     pub timeout: u32,
     pub on_timeout: Option<Arc<str>>,
     pub on_resume: Option<Arc<str>>,

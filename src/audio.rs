@@ -4,7 +4,7 @@ use libpulse_binding::{
     self as pulse,
     callbacks::ListResult,
     context::{subscribe::InterestMaskSet, FlagSet},
-    error::PAErr,
+    error::{Code, PAErr},
     mainloop::threaded::Mainloop,
 };
 use pulse::context::Context;
@@ -25,6 +25,12 @@ fn process_sink_inputs(
             ListResult::Item(info) => {
                 if !info.corked {
                     playing.set(true);
+                    if let Some(app_name) = info
+                        .proplist
+                        .get_str(pulse::proplist::properties::APPLICATION_NAME)
+                    {
+                        log::info!("Audio playing by: {}", app_name);
+                    }
                 }
             }
             ListResult::End => {
@@ -46,12 +52,22 @@ pub async fn serve(
         return Ok(());
     }
 
-    let mut mainloop = Mainloop::new().ok_or(PAErr(0))?;
-    let mut context = Context::new(&mainloop, "volume-change-listener").ok_or(PAErr(0))?;
+    let mut mainloop = Mainloop::new().ok_or(PAErr(Code::NoData as i32))?;
+    let mut context =
+        Context::new(&mainloop, "playback-listener").ok_or(PAErr(Code::NoData as i32))?;
     context.connect(None, FlagSet::NOFLAGS, None)?;
     mainloop.start()?;
 
-    while context.get_state() != pulse::context::State::Ready {}
+    loop {
+        match context.get_state() {
+            pulse::context::State::Ready => break,
+            pulse::context::State::Failed => return Err(PAErr(Code::ConnectionRefused as i32)),
+            pulse::context::State::Terminated => {
+                return Err(PAErr(Code::ConnectionTerminated as i32))
+            }
+            _ => mainloop.wait(),
+        }
+    }
 
     let introspector = context.introspect();
 
