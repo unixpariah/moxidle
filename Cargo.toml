@@ -3,6 +3,12 @@ name = "moxidle"
 version = "1.0.0"
 edition = "2021"
 
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+
 [dependencies]
 calloop = { version = "0.14.2", features = [ "executor" ] }
 calloop-wayland-source = "0.4.0"
@@ -14,8 +20,8 @@ wayland-client = "0.31.7"
 wayland-protocols = { version = "0.32.5", features = [ "staging", "client" ] }
 futures-lite = "2.6.0"
 zbus = "5.3.1"
-tokio = { version = "1.43.0", features = ["process", "macros", "rt-multi-thread", "sync"] }
 libpulse-binding = { version = "2.28.2", optional = true }
+tokio = { version = "1.45.0", features = ["process", "macros", "rt-multi-thread", "sync"] }
 clap = { version = "4.5.27", features = ["derive"] }
 serde_repr = "0.1.19"
 
