@@ -9,7 +9,7 @@ use calloop::EventLoop;
 use calloop_wayland_source::WaylandSource;
 use clap::Parser;
 use config::Condition;
-use config::{Config, MoxidleConfig, TimeoutConfig};
+use config::{Config, ListenerConfig, MoxidleConfig};
 use env_logger::Builder;
 use log::LevelFilter;
 use std::process::{Command, Stdio};
@@ -30,12 +30,12 @@ use wayland_protocols::ext::idle_notify::v1::client::{
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
 struct TimeoutHandler {
-    config: TimeoutConfig,
+    config: ListenerConfig,
     notification: Option<ext_idle_notification_v1::ExtIdleNotificationV1>,
 }
 
 impl Deref for TimeoutHandler {
-    type Target = TimeoutConfig;
+    type Target = ListenerConfig;
 
     fn deref(&self) -> &Self::Target {
         &self.config
@@ -43,7 +43,7 @@ impl Deref for TimeoutHandler {
 }
 
 impl TimeoutHandler {
-    fn new(config: TimeoutConfig) -> Self {
+    fn new(config: ListenerConfig) -> Self {
         Self {
             config,
             notification: None,
@@ -119,7 +119,7 @@ struct Moxidle {
     state: State,
     seat: wl_seat::WlSeat,
     notifier: ext_idle_notifier_v1::ExtIdleNotifierV1,
-    timeouts: Vec<TimeoutHandler>,
+    listeners: Vec<TimeoutHandler>,
     config: MoxidleConfig,
     inhibitors: Inhibitors,
     qh: QueueHandle<Self>,
@@ -148,9 +148,9 @@ impl Moxidle {
         let seat = globals.bind::<wl_seat::WlSeat, _, _>(&qh, 1..=4, ())?;
         seat.get_pointer(&qh, ());
 
-        let (general_config, timeout_configs) = Config::load(config_path)?;
+        let (general_config, listener_configs) = Config::load(config_path)?;
 
-        let timeouts = timeout_configs
+        let listeners = listener_configs
             .into_iter()
             .map(TimeoutHandler::new)
             .collect();
@@ -158,7 +158,7 @@ impl Moxidle {
         Ok(Self {
             state: State::new(emit_sender),
             power: Power::default(),
-            timeouts,
+            listeners,
             config: general_config,
             notifier,
             seat,
@@ -172,7 +172,7 @@ impl Moxidle {
         F: Fn(&Condition) -> bool,
     {
         !self
-            .timeouts
+            .listeners
             .iter()
             .any(|timeout| timeout.config.conditions.iter().any(&condition_predicate))
     }
@@ -283,7 +283,7 @@ impl Moxidle {
     }
 
     fn reset_idle_timers(&mut self) {
-        self.timeouts.iter_mut().for_each(|handler| {
+        self.listeners.iter_mut().for_each(|handler| {
             let current_met = if !self.inhibitors.active() {
                 handler.conditions.iter().all(|condition| match condition {
                     Condition::OnBattery => self.power.source() == &PowerSource::Battery,
@@ -393,7 +393,7 @@ impl Dispatch<ext_idle_notification_v1::ExtIdleNotificationV1, ()> for Moxidle {
         }
 
         let Some(handler) = state
-            .timeouts
+            .listeners
             .iter()
             .find(|timeout| timeout.notification.as_ref() == Some(notification))
         else {

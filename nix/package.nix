@@ -14,17 +14,22 @@ rustPlatform.buildRustPackage {
   pname = "moxidle";
   version = "${cargoToml.package.version}";
   cargoLock.lockFile = ../Cargo.lock;
-  src = lib.fileset.toSource {
-    root = ./..;
-    fileset = lib.fileset.intersection (lib.fileset.fromSource (lib.sources.cleanSource ./..)) (
-      lib.fileset.unions [
-        ../src
-        ../Cargo.toml
-        ../Cargo.lock
-        ../doc
-        ../completions
-      ]
-    );
+
+  src = lib.cleanSourceWith {
+    src = ../.;
+    filter =
+      path: type:
+      let
+        relPath = lib.removePrefix (toString ../. + "/") (toString path);
+      in
+      lib.any (p: lib.hasPrefix p relPath) [
+        "src"
+        "Cargo.toml"
+        "Cargo.lock"
+        "doc"
+        "contrib"
+        "completions"
+      ];
   };
 
   nativeBuildInputs = [
@@ -37,6 +42,12 @@ rustPlatform.buildRustPackage {
     libpulseaudio
     installShellFiles
   ];
+
+  postFixup = ''
+    mkdir -p $out/share/systemd/user
+    substitute $src/contrib/systemd/moxidle.service.in $out/share/systemd/user/moxidle.service --replace-fail '@bindir@' "$out/bin"
+    chmod 0644 $out/share/systemd/user/moxidle.service
+  '';
 
   postInstall = ''
     for f in doc/*.scd; do
@@ -52,7 +63,7 @@ rustPlatform.buildRustPackage {
   '';
 
   meta = with lib; {
-    description = "Idle daemon with conditional timeouts and built-in audio inhibitor";
+    description = "Idle daemon with conditional listeners and built-in audio inhibitor";
     mainProgram = "moxidle";
     homepage = "https://github.com/unixpariah/moxidle";
     license = licenses.mit;

@@ -6,13 +6,13 @@ use std::{fs, path::PathBuf, sync::Arc};
 #[derive(Deserialize)]
 pub struct Config {
     pub general: MoxidleConfig,
-    pub timeouts: Vec<TimeoutConfig>,
+    pub listeners: Vec<ListenerConfig>,
 }
 
 impl Config {
     pub fn load(
         path: Option<PathBuf>,
-    ) -> Result<(MoxidleConfig, Vec<TimeoutConfig>), Box<dyn std::error::Error>> {
+    ) -> Result<(MoxidleConfig, Vec<ListenerConfig>), Box<dyn std::error::Error>> {
         let config_path = if let Some(path) = path {
             path
         } else {
@@ -24,7 +24,7 @@ impl Config {
 
         let config: Config = lua.from_value(lua_result)?;
 
-        Ok((config.general, config.timeouts))
+        Ok((config.general, config.listeners))
     }
 
     pub fn path() -> Result<PathBuf, Box<dyn std::error::Error>> {
@@ -186,7 +186,7 @@ where
 }
 
 #[derive(Deserialize)]
-pub struct TimeoutConfig {
+pub struct ListenerConfig {
     #[serde(default)]
     pub conditions: Box<[Condition]>,
     pub timeout: u32,
@@ -194,7 +194,7 @@ pub struct TimeoutConfig {
     pub on_resume: Option<Arc<str>>,
 }
 
-impl TimeoutConfig {
+impl ListenerConfig {
     pub fn timeout_millis(&self) -> u32 {
         self.timeout * 1000
     }

@@ -2,7 +2,7 @@ moxidle(1)
 
 # NAME
 
-moxidle - Configurable Wayland idle daemon with audio inhibition and conditional timeouts
+moxidle - Configurable Wayland idle daemon with audio inhibition and conditional listeners
 
 # SYNOPSIS
 
@@ -16,7 +16,7 @@ moxidle - Configurable Wayland idle daemon with audio inhibition and conditional
 *moxidle* is a feature-rich idle daemon for Wayland compositors. It goes beyond basic idle management by offering configurable and extensible idle handling, including:
 
 - **Audio Inhibition:** Prevents the system from becoming idle when audio is actively playing, ensuring uninterrupted playback.
-- **Conditional Timeouts:** Allows you to define different idle timeouts based on various conditions (e.g., user activity, specific applications running).
+- **Conditional Listeners:** Allows you to define different idle listeners based on various conditions (e.g., user activity, specific applications running).
 - **Extensible Configuration:**  Configuration through a dedicated file, allowing for detailed customization of idle behavior.
 
 *moxidle* implements the *ext-idle-notify-v1* Wayland protocol, making it compatible with Wayland compositors supporting this extension. It aims to provide a flexible and powerful solution for managing system idle in Wayland environments.

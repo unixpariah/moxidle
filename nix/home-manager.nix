@@ -65,7 +65,7 @@ in
             after_sleep_cmd = "\${pkgs.libnotify}/bin/notify-send 'Awake!'";
             ignore_dbus_inhibit = false;
           };
-          timeouts = [
+          listeners = [
             {
               condition = "on_battery";
               timeout = 300;
@@ -96,25 +96,5 @@ in
     };
 
     home.packages = [ cfg.package ];
-
-    systemd.user.services.moxidle = {
-      Install = {
-        WantedBy = [ config.wayland.systemd.target ];
-      };
-
-      Unit = {
-        Description = "moxidle idle manager";
-        PartOf = [ config.wayland.systemd.target ];
-        After = [ config.wayland.systemd.target ];
-        ConditionEnvironment = "WAYLAND_DISPLAY";
-        X-Restart-Triggers = [ config.xdg.configFile."moxidle/config.lua".source ];
-      };
-
-      Service = {
-        ExecStart = "${lib.getExe cfg.package}";
-        Restart = "always";
-        RestartSec = "10";
-      };
-    };
   };
 }

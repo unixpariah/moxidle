@@ -8,7 +8,7 @@ Feature-rich Wayland idle daemon.
 - Supports `loginctl` commands (lock, unlock, before-sleep)
 - Handles DBus idle-inhibit (used by applications like Firefox and Steam)
 - Supports audio-based idle inhibition
-- Allows for configurable conditional timeouts
+- Allows for configurable conditional listeners
 - Extends beyond default org.freedesktop.SessionManager protocol by implementing additional features available in kscreenlocker
 
 ## Configuration
@@ -28,7 +28,7 @@ return {
     ignore_systemd_inhibit = false, -- Ignore systemd idle inhibitors
     ignore_audio_inhibit = false, -- Ignore audio activity inhibition
   },
-  timeouts = {
+  listeners = {
     {
       conditions = { "on_battery", { battery_below = 20 } }, -- Conditions needed to be fullfilled for timeout to launch
       timeout = 300, -- Idle timeout in seconds

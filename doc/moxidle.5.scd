@@ -76,16 +76,16 @@ This section describes the available configuration options within the *moxidle* 
 
 	_Example:_ pidof hyprlock || hyprlock \
 
-*Timeouts settings*
+*Listener settings*
 
-*timeouts.conditions*
+*listeners.conditions*
 	Conditions required to be fullfilled for timeout notification to be created.
 
 	_Type:_ Table of conditions
 
 	_Default:_ { }
 
-*timeouts.on_timeout*
+*listeners.on_timeout*
 	Command to run when the timeout duration is reached.
 
 	_Type:_ String
@@ -94,7 +94,7 @@ This section describes the available configuration options within the *moxidle* 
 
 	_Example:_ systemctl suspend
 
-*timeouts.on_resume*
+*listeners.on_resume*
 	Command to run when activity is detected after timeout has fired..
 
 	_Type:_ String
@@ -103,7 +103,7 @@ This section describes the available configuration options within the *moxidle* 
 
 	_Example:_ notify-send "Welcome back!"
 
-*timeouts.timeout*
+*listeners.timeout*
 	The timeout duration in seconds. 
 
 	_Type:_ Number
@@ -226,7 +226,7 @@ return {
     ignore_systemd_inhibit = false,
     ignore_audio_inhibit = false,
   },
-  timeouts = {
+  listeners = {
     {
       conditions = { "on_battery", { battery_below = 20 } },
       timeout = 300, -- Idle timeout in seconds
