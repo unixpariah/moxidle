@@ -28,11 +28,22 @@ impl Config {
     }
 
     pub fn path() -> Result<PathBuf, Box<dyn std::error::Error>> {
+        let home_dir = std::env::var("HOME").map(PathBuf::from)?;
         let config_dir = std::env::var("XDG_CONFIG_HOME")
             .map(PathBuf::from)
-            .or_else(|_| std::env::var("HOME").map(|home| PathBuf::from(home).join(".config")))?;
+            .unwrap_or_else(|_| home_dir.join(".config"));
 
-        Ok(config_dir.join("moxidle/config.lua"))
+        let mox_path = config_dir.join("mox").join("moxidle").join("config.lua");
+        if mox_path.exists() {
+            return Ok(mox_path);
+        }
+
+        let standard_path = config_dir.join("moxidle").join("config.lua");
+        if standard_path.exists() {
+            return Ok(standard_path);
+        }
+
+        Ok(standard_path)
     }
 }
 

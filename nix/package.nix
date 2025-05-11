@@ -43,12 +43,6 @@ rustPlatform.buildRustPackage {
     installShellFiles
   ];
 
-  postFixup = ''
-    mkdir -p $out/share/systemd/user
-    substitute $src/contrib/systemd/moxidle.service.in $out/share/systemd/user/moxidle.service --replace-fail '@bindir@' "$out/bin"
-    chmod 0644 $out/share/systemd/user/moxidle.service
-  '';
-
   postInstall = ''
     for f in doc/*.scd; do
       local page="doc/$(basename "$f" .scd)"
