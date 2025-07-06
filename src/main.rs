@@ -219,12 +219,12 @@ impl Moxidle {
             Event::BlockInhibited(inhibition) => {
                 self.inhibitors.systemd_inhibitor = inhibition.contains("idle");
                 self.reset_idle_timers();
-                }
-             #[cfg(feature = "audio")]
+            }
+            #[cfg(feature = "audio")]
             Event::AudioInhibit(inhibited) => {
                 self.inhibitors.audio_inhibitor = inhibited;
                 self.reset_idle_timers();
-            }    
+            }
             Event::SessionLocked(locked) => {
                 let cmd = if locked {
                     self.lock_cmd.as_ref()
