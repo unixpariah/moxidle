@@ -13,15 +13,21 @@ Feature-rich Wayland idle daemon.
 
 ## Configuration
 
-Moxidle's configuration is written in Lua and is located at `$XDG_CONFIG_HOME/moxidle/config.lua` or `~/.config/moxidle/config.lua`. The format is heavily inspired by hypridle
+Moxidle's configuration is written in Lua and is located at `$XDG_CONFIG_HOME/moxidle/config.lua` or `~/.config/moxidle/config.lua`.
 
 ### Example Configuration
 
 ```lua
 return {
   general = {
-    lock_cmd = "pidof hyprlock || hyprlock", -- Command to lock the session
-    unlock_cmd = "notify-send 'Unlocking'", -- Command to run on unlock
+    -- Command executed when org.freedesktop.login1.Session Lock signal is emitted
+    -- This signal is triggered by commands like 'loginctl lock-sessions'
+    lock_cmd = "pidof hyprlock || hyprlock",
+
+    -- Command executed when org.freedesktop.login1.Session Unlock signal is emitted  
+    -- This signal is triggered by commands like 'loginctl unlock-sessions'
+    unlock_cmd = "pkill -USR1 hyprlock",
+
     before_sleep_cmd = "notify-send 'Going to sleep'", -- Command executed before sleep
     after_sleep_cmd = "notify-send 'Awake!'", -- Command executed after waking up
     ignore_dbus_inhibit = false, -- Ignore DBus idle-inhibit requests
@@ -95,6 +101,15 @@ For automatic startup, you can add it to your compositor's config or use systemd
 
 ```sh
 systemctl --user enable --now moxidle.service
+```
+
+You can temporarily prevent idle actions using systemd-inhibit:
+
+```sh
+systemd-inhibit \
+  --who="me" \
+  --what=idle \
+  --why="Prevent my system from sleeping" \
 ```
 
 ## Command-line Flags
