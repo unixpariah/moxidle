@@ -54,6 +54,9 @@ rustPlatform.buildRustPackage {
       --bash completions/moxidle.bash \
       --fish completions/moxidle.fish \
       --zsh completions/_moxidle
+
+    # This is for integration with moxctl
+    ln -s $out/bin/moxidle $out/bin/moxidlectl
   '';
 
   meta = with lib; {
