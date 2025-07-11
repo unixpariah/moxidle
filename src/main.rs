@@ -12,17 +12,16 @@ use config::Condition;
 use config::{Config, ListenerConfig, MoxidleConfig};
 use env_logger::Builder;
 use log::LevelFilter;
-//use rusb::UsbContext;
+use rusb::UsbContext;
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::{error::Error, ops::Deref, path::PathBuf, sync::Arc, time::Instant};
 use tokio::sync::oneshot;
 use upower::{BatteryLevel, BatteryState, LevelComparison, Power, PowerSource};
 use wayland_client::{
-    delegate_noop,
-    globals::{registry_queue_init, GlobalList, GlobalListContents},
+    Connection, Dispatch, QueueHandle, delegate_noop,
+    globals::{GlobalList, GlobalListContents, registry_queue_init},
     protocol::{wl_pointer, wl_registry, wl_seat},
-    Connection, Dispatch, QueueHandle,
 };
 use wayland_protocols::ext::idle_notify::v1::client::{
     ext_idle_notification_v1, ext_idle_notifier_v1,
@@ -33,14 +32,6 @@ type Result<T> = std::result::Result<T, Box<dyn Error>>;
 struct TimeoutHandler {
     config: ListenerConfig,
     notification: Option<ext_idle_notification_v1::ExtIdleNotificationV1>,
-}
-
-impl Deref for TimeoutHandler {
-    type Target = ListenerConfig;
-
-    fn deref(&self) -> &Self::Target {
-        &self.config
-    }
 }
 
 impl TimeoutHandler {
@@ -291,35 +282,41 @@ impl Moxidle {
     fn reset_idle_timers(&mut self) {
         self.listeners.iter_mut().for_each(|handler| {
             let current_met = if !self.inhibitors.active() {
-                handler.conditions.iter().all(|condition| match condition {
-                    Condition::OnBattery => self.power.source() == &PowerSource::Battery,
-                    Condition::OnAc => self.power.source() == &PowerSource::Plugged,
-                    Condition::BatteryBelow(battery) => {
-                        self.power.level_cmp(battery) == LevelComparison::Below
-                    }
-                    Condition::BatteryAbove(battery) => {
-                        self.power.level_cmp(battery) == LevelComparison::Above
-                    }
-                    Condition::BatteryEqual(battery) => {
-                        self.power.level_cmp(battery) == LevelComparison::Equal
-                    }
-                    Condition::BatteryLevel(level) => self.power.level() == level,
-                    Condition::BatteryState(state) => self.power.state() == state,
-                    //Condition::UsbPlugged(id) => {
-                    //    let context = rusb::Context::new().unwrap();
-                    //    context.devices().unwrap().iter().any(|device| {
-                    //        let desc = device.device_descriptor().unwrap();
-                    //        format!("{}:{}", desc.vendor_id(), desc.product_id()) == **id
-                    //    })
-                    //}
-                    //Condition::UsbUnplugged(id) => {
-                    //    let context = rusb::Context::new().unwrap();
-                    //    context.devices().unwrap().iter().any(|device| {
-                    //        let desc = device.device_descriptor().unwrap();
-                    //        format!("{}:{}", desc.vendor_id(), desc.product_id()) != **id
-                    //    })
-                    //}
-                })
+                handler
+                    .config
+                    .conditions
+                    .iter()
+                    .all(|condition| match condition {
+                        Condition::OnBattery => self.power.source() == &PowerSource::Battery,
+                        Condition::OnAc => self.power.source() == &PowerSource::Plugged,
+                        Condition::BatteryBelow(battery) => {
+                            self.power.level_cmp(battery) == LevelComparison::Below
+                        }
+                        Condition::BatteryAbove(battery) => {
+                            self.power.level_cmp(battery) == LevelComparison::Above
+                        }
+                        Condition::BatteryEqual(battery) => {
+                            self.power.level_cmp(battery) == LevelComparison::Equal
+                        }
+                        Condition::BatteryLevel(level) => self.power.level() == level,
+                        Condition::BatteryState(state) => self.power.state() == state,
+                        Condition::UsbPlugged(id) => {
+                            let context = rusb::Context::new().unwrap();
+                            context.devices().unwrap().iter().any(|device| {
+                                let desc = device.device_descriptor().unwrap();
+                                format!("{:04x}:{:04x}", desc.vendor_id(), desc.product_id())
+                                    == **id
+                            })
+                        }
+                        Condition::UsbUnplugged(id) => {
+                            let context = rusb::Context::new().unwrap();
+                            context.devices().unwrap().iter().any(|device| {
+                                let desc = device.device_descriptor().unwrap();
+                                format!("{:04x}:{:04x}", desc.vendor_id(), desc.product_id())
+                                    != **id
+                            })
+                        }
+                    })
             } else {
                 false
             };
@@ -334,19 +331,21 @@ impl Moxidle {
                     ));
 
                     log::debug!(
-                        "Notification created\ntimeout: {}\non_timeout: {:?}\non_resume: {:?}",
-                        handler.timeout,
-                        handler.on_timeout,
-                        handler.on_resume
+                        "Notification created\ntimeout: {}\nconditions: {:?}\non_timeout: {:?}\non_resume: {:?}",
+                        handler.config.timeout,
+                        handler.config.conditions,
+                        handler.config.on_timeout,
+                        handler.config.on_resume
                     );
                 }
             } else if let Some(notification) = handler.notification.take() {
                 notification.destroy();
                 log::debug!(
-                    "Notification destroyed\ntimeout: {}\non_timeout: {:?}\non_resume: {:?}",
-                    handler.timeout,
-                    handler.on_timeout,
-                    handler.on_resume
+                    "Notification destroyed\ntimeout: {}\nconditions: {:?}\non_timeout: {:?}\non_resume: {:?}",
+                    handler.config.timeout,
+                    handler.config.conditions,
+                    handler.config.on_timeout,
+                    handler.config.on_resume
                 );
             }
         });
@@ -380,7 +379,7 @@ fn execute_command(command: Arc<str>) {
     {
         Ok(child) => child,
         Err(err) => {
-            log::error!("failed to execute command '{}': {}", command, err);
+            log::error!("failed to execute command '{command}': {err}");
             return;
         }
     };
@@ -388,9 +387,9 @@ fn execute_command(command: Arc<str>) {
     std::thread::spawn(move || match child.wait() {
         Ok(status) if status.success() => {}
         Ok(status) => {
-            log::error!("command '{}' failed with exit status {}", command, status)
+            log::error!("command '{command}' failed with exit status {status}")
         }
-        Err(err) => log::error!("failed to wait on command '{}': {}", command, err),
+        Err(err) => log::error!("failed to wait on command '{command}': {err}"),
     });
 }
 
@@ -423,14 +422,14 @@ impl Dispatch<ext_idle_notification_v1::ExtIdleNotificationV1, ()> for Moxidle {
         match event {
             ext_idle_notification_v1::Event::Idled => {
                 if let Some(cmd) = handler.on_timeout() {
-                    log::info!("Executing timeout command: {}", cmd);
+                    log::info!("Executing timeout command: {cmd}");
                     execute_command(cmd.clone());
                 }
                 state.state.set_lock_state(LockState::Locked);
             }
             ext_idle_notification_v1::Event::Resumed => {
                 if let Some(cmd) = handler.on_resume() {
-                    log::info!("Executing resume command: {}", cmd);
+                    log::info!("Executing resume command: {cmd}");
                     execute_command(cmd.clone());
                 }
                 state.state.set_lock_state(LockState::Unlocked);
@@ -539,7 +538,7 @@ async fn main() -> Result<()> {
             )
             .await
             {
-                log::error!("D-Bus upower error: {}", e);
+                log::error!("D-Bus upower error: {e}");
             }
         })?;
     }
@@ -551,7 +550,7 @@ async fn main() -> Result<()> {
             if let Err(e) =
                 screensaver::serve(event_sender, emit_receiver, ignore_dbus_inhibit).await
             {
-                log::error!("D-Bus screensaver error: {}", e);
+                log::error!("D-Bus screensaver error: {e}");
             }
         })?;
     }
@@ -562,7 +561,7 @@ async fn main() -> Result<()> {
         let dbus_conn = Arc::clone(&dbus_conn);
         scheduler.schedule(async move {
             if let Err(e) = login::serve(dbus_conn, event_sender, ignore_systemd_inhibit).await {
-                log::error!("D-Bus login manager error: {}", e);
+                log::error!("D-Bus login manager error: {e}");
             }
         })?;
     }
@@ -573,7 +572,7 @@ async fn main() -> Result<()> {
         let event_sender = event_sender.clone();
         scheduler.schedule(async move {
             if let Err(e) = audio::serve(event_sender, ignore_audio_inhibit).await {
-                log::error!("Audio error: {}", e);
+                log::error!("Audio error: {e}");
             }
         })?;
     }

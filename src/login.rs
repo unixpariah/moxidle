@@ -32,7 +32,7 @@ trait LoginSession {
 
 async fn handle_block_inhibited(value: &str, sender: &channel::Sender<Event>) {
     if let Err(e) = sender.send(Event::BlockInhibited(value.contains("idle"))) {
-        log::error!("Failed to send BlockInhibited event: {}", e);
+        log::error!("Failed to send BlockInhibited event: {e}");
     }
 }
 
@@ -51,7 +51,7 @@ pub async fn serve(
     {
         Ok(session) => session,
         Err(e) => {
-            log::error!("Couldn't create session proxy: {}", e);
+            log::error!("Couldn't create session proxy: {e}");
             return Ok(());
         }
     };
@@ -86,7 +86,7 @@ pub async fn serve(
         tokio::spawn(async move {
             while lock_stream.next().await.is_some() {
                 if let Err(e) = event_sender.send(Event::SessionLocked(true)) {
-                    log::error!("Failed to send SessionLocked event: {}", e)
+                    log::error!("Failed to send SessionLocked event: {e}")
                 }
             }
         });
@@ -97,7 +97,7 @@ pub async fn serve(
         tokio::spawn(async move {
             while unlock_stream.next().await.is_some() {
                 if let Err(e) = event_sender.send(Event::SessionLocked(false)) {
-                    log::error!("Failed to send SessionLocked event: {}", e)
+                    log::error!("Failed to send SessionLocked event: {e}")
                 }
             }
         });
@@ -110,7 +110,7 @@ pub async fn serve(
                 if let Ok(sleep) = sleep.args() {
                     let start = *sleep.start();
                     if let Err(e) = event_sender.send(Event::PrepareForSleep(start)) {
-                        log::error!("Failed to send PrepareForSleep({}) event: {}", start, e)
+                        log::error!("Failed to send PrepareForSleep({start}) event: {e}")
                     }
                 }
             }

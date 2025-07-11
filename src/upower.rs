@@ -5,7 +5,7 @@ use serde_repr::{Deserialize_repr, Serialize_repr};
 use std::{fmt::Display, sync::Arc};
 use zbus::{proxy, zvariant::OwnedValue};
 
-#[derive(PartialEq, OwnedValue, Deserialize_repr, Serialize_repr, Default)]
+#[derive(PartialEq, OwnedValue, Deserialize_repr, Serialize_repr, Default, Debug)]
 #[repr(u32)]
 pub enum BatteryState {
     #[default]
@@ -33,7 +33,7 @@ impl Display for BatteryState {
     }
 }
 
-#[derive(PartialEq, OwnedValue, Deserialize_repr, Serialize_repr, Default)]
+#[derive(PartialEq, OwnedValue, Deserialize_repr, Serialize_repr, Default, Debug)]
 #[repr(u32)]
 pub enum BatteryLevel {
     #[default]
@@ -158,25 +158,25 @@ trait Device {
 
 fn handle_battery_percentage(event_sender: &channel::Sender<Event>, value: f64) {
     if let Err(e) = event_sender.send(Event::BatteryPercentage(value)) {
-        log::warn!("Failed to get BatteryPercentage args: {}", e)
+        log::warn!("Failed to get BatteryPercentage args: {e}")
     }
 }
 
 fn handle_state(event_sender: &channel::Sender<Event>, value: BatteryState) {
     if let Err(e) = event_sender.send(Event::BatteryState(value)) {
-        log::warn!("Failed to send BatteryState event: {}", e)
+        log::warn!("Failed to send BatteryState event: {e}")
     }
 }
 
 fn handle_battery_level(event_sender: &channel::Sender<Event>, value: BatteryLevel) {
     if let Err(e) = event_sender.send(Event::BatteryLevel(value)) {
-        log::warn!("Failed to send BatteryLevel event: {}", e)
+        log::warn!("Failed to send BatteryLevel event: {e}")
     }
 }
 
 fn handle_on_battery(event_sender: &channel::Sender<Event>, value: bool) {
     if let Err(e) = event_sender.send(Event::OnBattery(value)) {
-        log::warn!("Failed to send OnBattery event: {}", e)
+        log::warn!("Failed to send OnBattery event: {e}")
     }
 }
 

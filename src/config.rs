@@ -60,7 +60,7 @@ pub struct MoxidleConfig {
     pub ignore_audio_inhibit: bool,
 }
 
-#[derive(Deserialize, PartialEq)]
+#[derive(Deserialize, PartialEq, Debug)]
 #[serde(rename_all = "snake_case")]
 pub enum Condition {
     OnBattery,
@@ -72,8 +72,8 @@ pub enum Condition {
     BatteryLevel(BatteryLevel),
     #[serde(deserialize_with = "deserialize_battery_state")]
     BatteryState(BatteryState),
-    //UsbPlugged(Arc<str>),
-    //UsbUnplugged(Arc<str>),
+    UsbPlugged(Arc<str>),
+    UsbUnplugged(Arc<str>),
 }
 
 #[derive(Debug)]

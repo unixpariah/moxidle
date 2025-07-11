@@ -33,13 +33,13 @@ impl ScreenSaver {
 
     async fn lock(&self) {
         if let Err(e) = self.event_sender.send(Event::ScreenSaverLock) {
-            log::error!("Failed to send SessionLocked(true) event: {}", e);
+            log::error!("Failed to send SessionLocked(true) event: {e}");
         }
     }
 
     async fn simulate_user_activity(&self) {
         if let Err(e) = self.event_sender.send(Event::SimulateUserActivity) {
-            log::error!("Failed to send SimulateUserActivity event: {}", e);
+            log::error!("Failed to send SimulateUserActivity event: {e}");
         }
     }
 
@@ -82,16 +82,12 @@ impl ScreenSaver {
         let cookie = self.last_cookie.fetch_add(1, Ordering::Relaxed) + 1;
         if let Some(sender) = header.sender() {
             log::info!(
-                "Added screensaver inhibitor for application '{}' {:?}, reason: {}, cookie: {}",
-                application_name,
-                sender,
-                reason_for_inhibit,
-                cookie
+                "Added screensaver inhibitor for application '{application_name}' {sender:?}, reason: {reason_for_inhibit}, cookie: {cookie}"
             );
             let mut inhibitors = self.inhibitors.lock().await;
             if inhibitors.is_empty()
                 && let Err(e) = self.event_sender.send(Event::ScreenSaverInhibit(true)) {
-                    log::error!("Failed to send ScreenSaverInhibit event {}", e);
+                    log::error!("Failed to send ScreenSaverInhibit event {e}");
                 }
             inhibitors.push(Inhibitor {
                 cookie,
@@ -109,7 +105,7 @@ impl ScreenSaver {
             let inhibitor = inhibitors.remove(idx);
             if inhibitors.is_empty()
                 && let Err(e) = self.event_sender.send(Event::ScreenSaverInhibit(false)) {
-                    log::error!("Failed to send ScreenSaverInhibit event {}", e);
+                    log::error!("Failed to send ScreenSaverInhibit event {e}");
                 }
             log::info!(
                 "Removed screensaver inhibitor for application '{}' {:?}, reason: {}, cookie: {}",
@@ -187,8 +183,7 @@ pub async fn serve(
                                 && let Err(e) = event_sender.send(Event::ScreenSaverInhibit(false))
                                 {
                                     log::error!(
-                                        "Failed to send ScreenSaverInhibit(false) event: {}",
-                                        e
+                                        "Failed to send ScreenSaverInhibit(false) event: {e}"
                                     );
                                 }
                         }
@@ -213,7 +208,7 @@ pub async fn serve(
                 ScreenSaver::active_changed(interfaces.0.signal_emitter()),
                 ScreenSaver::active_changed(interfaces.1.signal_emitter())
             ) {
-                log::error!("Failed to emit active changed event: {}", e);
+                log::error!("Failed to emit active changed event: {e}");
             }
         }
     });

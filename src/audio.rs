@@ -71,7 +71,7 @@ fn process_sink_inputs(
 
                 if !info.corked {
                     if let Some(inhibitor) = AudioInhibitor::new(&info.proplist) {
-                        log::info!("Added audio inhibitor for {}", inhibitor);
+                        log::info!("Added audio inhibitor for {inhibitor}");
                         inhibitors.insert(inhibitor.binary.clone(), inhibitor);
                     }
                 } else if let Some(name) = info
@@ -79,14 +79,14 @@ fn process_sink_inputs(
                     .get_str(pulse::proplist::properties::APPLICATION_PROCESS_BINARY)
                     && let Some(removed) = inhibitors.remove(&name)
                 {
-                    log::info!("Removed audio inhibitor for {}", removed);
+                    log::info!("Removed audio inhibitor for {removed}");
                 }
             }
             ListResult::End => {
                 if let Err(e) =
                     event_sender.send(Event::AudioInhibit(!inhibitors.lock().unwrap().is_empty()))
                 {
-                    log::error!("Failed to send AudioInhibit event: {}", e);
+                    log::error!("Failed to send AudioInhibit event: {e}");
                 }
             }
         }
