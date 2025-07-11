@@ -3,41 +3,90 @@ use calloop::channel;
 use libpulse_binding::{
     self as pulse,
     callbacks::ListResult,
-    context::{subscribe::InterestMaskSet, FlagSet},
+    context::{FlagSet, subscribe::InterestMaskSet},
     error::{Code, PAErr},
     mainloop::threaded::Mainloop,
+    proplist,
 };
 use pulse::context::Context;
-use std::{cell::Cell, rc::Rc};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
+
+#[derive(Debug)]
+struct AudioInhibitor {
+    app_name: String,
+    pid: String,
+    binary: String,
+    media_name: Option<String>,
+    media_title: Option<String>,
+}
+
+impl AudioInhibitor {
+    fn new(proplist: &proplist::Proplist) -> Option<Self> {
+        let app_name = proplist.get_str(pulse::proplist::properties::APPLICATION_NAME)?;
+        let binary = proplist.get_str(pulse::proplist::properties::APPLICATION_PROCESS_BINARY)?;
+        let pid = proplist.get_str(pulse::proplist::properties::APPLICATION_PROCESS_ID)?;
+        let media_name = proplist.get_str(pulse::proplist::properties::MEDIA_NAME);
+        let media_title = proplist.get_str(pulse::proplist::properties::MEDIA_TITLE);
+
+        Some(Self {
+            app_name,
+            pid,
+            binary,
+            media_name,
+            media_title,
+        })
+    }
+}
+
+impl std::fmt::Display for AudioInhibitor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "application '{}' (PID: {}, Binary: {}, Media: {}, Title: {})",
+            self.app_name,
+            self.pid,
+            self.binary,
+            self.media_name.as_deref().unwrap_or("unknown"),
+            self.media_title.as_deref().unwrap_or("unknown")
+        )
+    }
+}
 
 fn process_sink_inputs(
+    inhibitors: Arc<Mutex<HashMap<String, AudioInhibitor>>>,
     introspector: &pulse::context::introspect::Introspector,
     event_sender: &channel::Sender<Event>,
 ) {
-    let playing = Rc::new(Cell::new(false));
     introspector.get_sink_input_info_list({
-        let playing = playing.clone();
         let event_sender = event_sender.clone();
         move |result| match result {
             ListResult::Error => {
                 log::error!("Error retrieving sink input info list")
             }
             ListResult::Item(info) => {
+                let mut inhibitors = inhibitors.lock().unwrap();
+
                 if !info.corked {
-                    playing.set(true);
-                    if let Some(app_name) = info
-                        .proplist
-                        .get_str(pulse::proplist::properties::APPLICATION_NAME)
-                    {
-                        log::info!("Audio playing by: {}", app_name);
+                    if let Some(inhibitor) = AudioInhibitor::new(&info.proplist) {
+                        log::info!("Added audio inhibitor for {}", inhibitor);
+                        inhibitors.insert(inhibitor.binary.clone(), inhibitor);
                     }
+                } else if let Some(name) = info
+                    .proplist
+                    .get_str(pulse::proplist::properties::APPLICATION_PROCESS_BINARY)
+                    && let Some(removed) = inhibitors.remove(&name)
+                {
+                    log::info!("Removed audio inhibitor for {}", removed);
                 }
             }
             ListResult::End => {
-                let is_playing = playing.get();
-                log::info!("Sending AudioInhibit({}) event", is_playing);
-                if let Err(e) = event_sender.send(Event::AudioInhibit(is_playing)) {
-                    log::error!("Failed to send AudioInhibit({}) event: {}", is_playing, e);
+                if let Err(e) =
+                    event_sender.send(Event::AudioInhibit(!inhibitors.lock().unwrap().is_empty()))
+                {
+                    log::error!("Failed to send AudioInhibit event: {}", e);
                 }
             }
         }
@@ -52,6 +101,8 @@ pub async fn serve(
         return Ok(());
     }
 
+    let inhibitors = Arc::new(Mutex::new(HashMap::new()));
+
     let mut mainloop = Mainloop::new().ok_or(PAErr(Code::NoData as i32))?;
     let mut context =
         Context::new(&mainloop, "playback-listener").ok_or(PAErr(Code::NoData as i32))?;
@@ -63,7 +114,7 @@ pub async fn serve(
             pulse::context::State::Ready => break,
             pulse::context::State::Failed => return Err(PAErr(Code::ConnectionRefused as i32)),
             pulse::context::State::Terminated => {
-                return Err(PAErr(Code::ConnectionTerminated as i32))
+                return Err(PAErr(Code::ConnectionTerminated as i32));
             }
             _ => mainloop.wait(),
         }
@@ -71,10 +122,11 @@ pub async fn serve(
 
     let introspector = context.introspect();
 
-    process_sink_inputs(&introspector, &event_sender);
+    process_sink_inputs(Arc::clone(&inhibitors), &introspector, &event_sender);
     context.set_subscribe_callback(Some(Box::new({
+        let inhibitors = Arc::clone(&inhibitors);
         move |_, _, _| {
-            process_sink_inputs(&introspector, &event_sender);
+            process_sink_inputs(Arc::clone(&inhibitors), &introspector, &event_sender);
         }
     })));
     context.subscribe(InterestMaskSet::SINK_INPUT, |_| {});

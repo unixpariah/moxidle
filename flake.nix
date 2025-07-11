@@ -30,36 +30,45 @@
     in
     {
       devShells = forAllSystems (pkgs: {
-        default =
-          with pkgs;
-          mkShell {
-            buildInputs = [
-              (rust-bin.selectLatestNightlyWith (
-                toolchain:
-                toolchain.default.override {
-                  extensions = [
-                    "rust-src"
-                    "rustfmt"
-                  ];
-                }
-              ))
-              scdoc
-              rust-analyzer-unwrapped
-              nixd
-              pkg-config
-              lua5_4
-              libpulseaudio
-            ];
+        default = pkgs.mkShell {
+          buildInputs =
+            [
+              (pkgs.rust-bin.stable.latest.default.override {
+                extensions = [
+                  "rust-src"
+                  "rustfmt"
+                ];
+              })
+            ]
+            ++ builtins.attrValues {
+              inherit (pkgs)
+                scdoc
+                rust-analyzer-unwrapped
+                nixd
+                pkg-config
+                lua5_4
+                libpulseaudio
+                ;
+            };
 
-            shellHook = ''
-              export LD_LIBRARY_PATH=${pkgs.libpulseaudio}/lib:$LD_LIBRARY_PATH
-            '';
-          };
+          shellHook = ''
+            export LD_LIBRARY_PATH=${pkgs.libpulseaudio}/lib:$LD_LIBRARY_PATH
+          '';
+        };
 
       });
 
       packages = forAllSystems (pkgs: {
-        default = pkgs.callPackage ./nix/package.nix { };
+        default = pkgs.callPackage ./nix/package.nix {
+          rustPlatform =
+            let
+              rust-bin = pkgs.rust-bin.stable.latest.default;
+            in
+            pkgs.makeRustPlatform {
+              cargo = rust-bin;
+              rustc = rust-bin;
+            };
+        };
       });
 
       homeManagerModules = {

@@ -29,7 +29,7 @@ impl Display for BatteryState {
             BatteryState::PendingCharge => "pendingcharge",
             BatteryState::PendingDischarge => "pendingdischarge",
         };
-        write!(f, "{}", s)
+        write!(f, "{s}")
     }
 }
 
@@ -58,7 +58,7 @@ impl Display for BatteryLevel {
             BatteryLevel::Full => "full",
         };
 
-        write!(f, "{}", s)
+        write!(f, "{s}")
     }
 }
 
@@ -157,28 +157,24 @@ trait Device {
 }
 
 fn handle_battery_percentage(event_sender: &channel::Sender<Event>, value: f64) {
-    log::info!("Sending BatteryPercentage({}) event", value);
     if let Err(e) = event_sender.send(Event::BatteryPercentage(value)) {
         log::warn!("Failed to get BatteryPercentage args: {}", e)
     }
 }
 
 fn handle_state(event_sender: &channel::Sender<Event>, value: BatteryState) {
-    log::info!("Sending BatteryState({}) event", value);
     if let Err(e) = event_sender.send(Event::BatteryState(value)) {
         log::warn!("Failed to send BatteryState event: {}", e)
     }
 }
 
 fn handle_battery_level(event_sender: &channel::Sender<Event>, value: BatteryLevel) {
-    log::info!("Sending BatteryLevel({}) event", value);
     if let Err(e) = event_sender.send(Event::BatteryLevel(value)) {
         log::warn!("Failed to send BatteryLevel event: {}", e)
     }
 }
 
 fn handle_on_battery(event_sender: &channel::Sender<Event>, value: bool) {
-    log::info!("Sending OnBattery({}) event", value);
     if let Err(e) = event_sender.send(Event::OnBattery(value)) {
         log::warn!("Failed to send OnBattery event: {}", e)
     }

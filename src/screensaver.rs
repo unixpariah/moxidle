@@ -32,14 +32,12 @@ impl ScreenSaver {
     async fn active_changed(signal_emitter: &SignalEmitter<'_>) -> zbus::Result<()>;
 
     async fn lock(&self) {
-        log::info!("Sending SessionLocked(true) event");
         if let Err(e) = self.event_sender.send(Event::ScreenSaverLock) {
             log::error!("Failed to send SessionLocked(true) event: {}", e);
         }
     }
 
     async fn simulate_user_activity(&self) {
-        log::info!("Sending SimulateUserActivity event");
         if let Err(e) = self.event_sender.send(Event::SimulateUserActivity) {
             log::error!("Failed to send SimulateUserActivity event: {}", e);
         }
@@ -91,12 +89,10 @@ impl ScreenSaver {
                 cookie
             );
             let mut inhibitors = self.inhibitors.lock().await;
-            if inhibitors.is_empty() {
-                log::info!("Sending ScreenSaverInhibit(true) event");
-                if let Err(e) = self.event_sender.send(Event::ScreenSaverInhibit(true)) {
+            if inhibitors.is_empty()
+                && let Err(e) = self.event_sender.send(Event::ScreenSaverInhibit(true)) {
                     log::error!("Failed to send ScreenSaverInhibit event {}", e);
                 }
-            }
             inhibitors.push(Inhibitor {
                 cookie,
                 application_name: application_name.into(),
@@ -111,12 +107,10 @@ impl ScreenSaver {
         let mut inhibitors = self.inhibitors.lock().await;
         if let Some(idx) = inhibitors.iter().position(|x| x.cookie == cookie) {
             let inhibitor = inhibitors.remove(idx);
-            if inhibitors.is_empty() {
-                log::info!("Sending ScreenSaverInhibit(false) event");
-                if let Err(e) = self.event_sender.send(Event::ScreenSaverInhibit(false)) {
-                    log::error!("Failed to send ScreenSaverInhibit(false) event {}", e);
+            if inhibitors.is_empty()
+                && let Err(e) = self.event_sender.send(Event::ScreenSaverInhibit(false)) {
+                    log::error!("Failed to send ScreenSaverInhibit event {}", e);
                 }
-            }
             log::info!(
                 "Removed screensaver inhibitor for application '{}' {:?}, reason: {}, cookie: {}",
                 inhibitor.application_name,
@@ -183,26 +177,22 @@ pub async fn serve(
     let mut name_owner_stream = dbus.receive_name_owner_changed().await?;
     tokio::spawn(async move {
         while let Some(event) = name_owner_stream.next().await {
-            if let Ok(args) = event.args() {
-                if args.new_owner.is_none() {
-                    if let zbus::names::BusName::Unique(name) = args.name {
+            if let Ok(args) = event.args()
+                && args.new_owner.is_none()
+                    && let zbus::names::BusName::Unique(name) = args.name {
                         let mut inhibitors = inhibitors.lock().await;
                         if !inhibitors.is_empty() {
                             inhibitors.retain(|inhibitor| inhibitor.client != name);
-                            if inhibitors.is_empty() {
-                                log::info!("Sending ScreenSaverInhibit(false) event");
-                                if let Err(e) = event_sender.send(Event::ScreenSaverInhibit(false))
+                            if inhibitors.is_empty()
+                                && let Err(e) = event_sender.send(Event::ScreenSaverInhibit(false))
                                 {
                                     log::error!(
                                         "Failed to send ScreenSaverInhibit(false) event: {}",
                                         e
                                     );
                                 }
-                            }
                         }
                     }
-                }
-            }
         }
     });
 

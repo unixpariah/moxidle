@@ -72,6 +72,8 @@ pub enum Condition {
     BatteryLevel(BatteryLevel),
     #[serde(deserialize_with = "deserialize_battery_state")]
     BatteryState(BatteryState),
+    //UsbPlugged(Arc<str>),
+    //UsbUnplugged(Arc<str>),
 }
 
 #[derive(Debug)]
@@ -119,7 +121,7 @@ where
                 4 => Ok(BatteryState::FullyCharged),
                 5 => Ok(BatteryState::PendingCharge),
                 6 => Ok(BatteryState::PendingDischarge),
-                _ => Err(E::custom(format!("Invalid BatteryState u32: {}", value))),
+                _ => Err(E::custom(format!("Invalid BatteryState u32: {value}"))),
             }
         }
 
@@ -128,7 +130,7 @@ where
             E: serde::de::Error,
         {
             BatteryState::try_from(value)
-                .map_err(|_| E::custom(format!("Invalid BatteryState string: {}", value)))
+                .map_err(|_| E::custom(format!("Invalid BatteryState string: {value}")))
         }
     }
 
@@ -180,7 +182,7 @@ where
                 4 => Ok(BatteryLevel::Normal),
                 5 => Ok(BatteryLevel::High),
                 6 => Ok(BatteryLevel::Full),
-                _ => Err(E::custom(format!("Invalid BatteryLevel u32: {}", value))),
+                _ => Err(E::custom(format!("Invalid BatteryLevel u32: {value}"))),
             }
         }
 
@@ -189,7 +191,7 @@ where
             E: serde::de::Error,
         {
             BatteryLevel::try_from(value)
-                .map_err(|_| E::custom(format!("Invalid BatteryState string: {}", value)))
+                .map_err(|_| E::custom(format!("Invalid BatteryState string: {value}")))
         }
     }
 

@@ -12,6 +12,7 @@ use config::Condition;
 use config::{Config, ListenerConfig, MoxidleConfig};
 use env_logger::Builder;
 use log::LevelFilter;
+//use rusb::UsbContext;
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::{error::Error, ops::Deref, path::PathBuf, sync::Arc, time::Instant};
@@ -216,9 +217,14 @@ impl Moxidle {
                 self.inhibitors.dbus_inhibitor = inhibited;
                 self.reset_idle_timers();
             }
-            Event::BlockInhibited(inhibition) => {
-                self.inhibitors.systemd_inhibitor = inhibition.contains("idle");
-                self.reset_idle_timers();
+            Event::BlockInhibited(inhibited) => {
+                if inhibited != self.inhibitors.systemd_inhibitor {
+                    let action = if inhibited { "Added" } else { "Removed" };
+                    log::info!("{action} dbus inhibitor");
+
+                    self.inhibitors.systemd_inhibitor = inhibited;
+                    self.reset_idle_timers();
+                }
             }
             #[cfg(feature = "audio")]
             Event::AudioInhibit(inhibited) => {
@@ -299,6 +305,20 @@ impl Moxidle {
                     }
                     Condition::BatteryLevel(level) => self.power.level() == level,
                     Condition::BatteryState(state) => self.power.state() == state,
+                    //Condition::UsbPlugged(id) => {
+                    //    let context = rusb::Context::new().unwrap();
+                    //    context.devices().unwrap().iter().any(|device| {
+                    //        let desc = device.device_descriptor().unwrap();
+                    //        format!("{}:{}", desc.vendor_id(), desc.product_id()) == **id
+                    //    })
+                    //}
+                    //Condition::UsbUnplugged(id) => {
+                    //    let context = rusb::Context::new().unwrap();
+                    //    context.devices().unwrap().iter().any(|device| {
+                    //        let desc = device.device_descriptor().unwrap();
+                    //        format!("{}:{}", desc.vendor_id(), desc.product_id()) != **id
+                    //    })
+                    //}
                 })
             } else {
                 false
@@ -344,7 +364,7 @@ enum Event {
     SimulateUserActivity,
     SessionLocked(bool),
     ScreenSaverLock,
-    BlockInhibited(String),
+    BlockInhibited(bool),
     PrepareForSleep(bool),
     #[cfg(feature = "audio")]
     AudioInhibit(bool),
