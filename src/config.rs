@@ -10,9 +10,7 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn load(
-        path: Option<PathBuf>,
-    ) -> Result<(MoxidleConfig, Vec<ListenerConfig>), Box<dyn std::error::Error>> {
+    pub fn load(path: Option<PathBuf>) -> anyhow::Result<(MoxidleConfig, Vec<ListenerConfig>)> {
         let config_path = if let Some(path) = path {
             path
         } else {
@@ -20,14 +18,19 @@ impl Config {
         };
         let lua_code = fs::read_to_string(&config_path)?;
         let lua = Lua::new();
-        let lua_result = lua.load(&lua_code).eval()?;
+        let lua_result = lua
+            .load(&lua_code)
+            .eval()
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
 
-        let config: Config = lua.from_value(lua_result)?;
+        let config: Config = lua
+            .from_value(lua_result)
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
 
         Ok((config.general, config.listeners))
     }
 
-    pub fn path() -> Result<PathBuf, Box<dyn std::error::Error>> {
+    pub fn path() -> anyhow::Result<PathBuf> {
         let home_dir = std::env::var("HOME").map(PathBuf::from)?;
         let config_dir = std::env::var("XDG_CONFIG_HOME")
             .map(PathBuf::from)

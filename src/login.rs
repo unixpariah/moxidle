@@ -73,9 +73,10 @@ pub async fn serve(
             tokio::spawn(async move {
                 while let Some(change) = block_inhibited_stream.next().await {
                     if change.name() == "BlockInhibited"
-                        && let Ok(block_inhibited) = change.get().await {
-                            handle_block_inhibited(&block_inhibited, &event_sender).await;
-                        }
+                        && let Ok(block_inhibited) = change.get().await
+                    {
+                        handle_block_inhibited(&block_inhibited, &event_sender).await;
+                    }
                 }
             });
         }

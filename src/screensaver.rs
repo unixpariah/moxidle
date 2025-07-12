@@ -5,10 +5,11 @@ use crate::{Event, LockState};
 use calloop::channel;
 use futures_lite::StreamExt;
 use std::sync::{
+    Arc,
     atomic::{AtomicU32, Ordering},
-    mpsc, Arc,
+    mpsc,
 };
-use tokio::sync::{oneshot, Mutex};
+use tokio::sync::{Mutex, oneshot};
 use zbus::object_server::SignalEmitter;
 
 #[derive(Debug)]
@@ -86,9 +87,10 @@ impl ScreenSaver {
             );
             let mut inhibitors = self.inhibitors.lock().await;
             if inhibitors.is_empty()
-                && let Err(e) = self.event_sender.send(Event::ScreenSaverInhibit(true)) {
-                    log::error!("Failed to send ScreenSaverInhibit event {e}");
-                }
+                && let Err(e) = self.event_sender.send(Event::ScreenSaverInhibit(true))
+            {
+                log::error!("Failed to send ScreenSaverInhibit event {e}");
+            }
             inhibitors.push(Inhibitor {
                 cookie,
                 application_name: application_name.into(),
@@ -104,9 +106,10 @@ impl ScreenSaver {
         if let Some(idx) = inhibitors.iter().position(|x| x.cookie == cookie) {
             let inhibitor = inhibitors.remove(idx);
             if inhibitors.is_empty()
-                && let Err(e) = self.event_sender.send(Event::ScreenSaverInhibit(false)) {
-                    log::error!("Failed to send ScreenSaverInhibit event {e}");
-                }
+                && let Err(e) = self.event_sender.send(Event::ScreenSaverInhibit(false))
+            {
+                log::error!("Failed to send ScreenSaverInhibit event {e}");
+            }
             log::info!(
                 "Removed screensaver inhibitor for application '{}' {:?}, reason: {}, cookie: {}",
                 inhibitor.application_name,
@@ -175,19 +178,18 @@ pub async fn serve(
         while let Some(event) = name_owner_stream.next().await {
             if let Ok(args) = event.args()
                 && args.new_owner.is_none()
-                    && let zbus::names::BusName::Unique(name) = args.name {
-                        let mut inhibitors = inhibitors.lock().await;
-                        if !inhibitors.is_empty() {
-                            inhibitors.retain(|inhibitor| inhibitor.client != name);
-                            if inhibitors.is_empty()
-                                && let Err(e) = event_sender.send(Event::ScreenSaverInhibit(false))
-                                {
-                                    log::error!(
-                                        "Failed to send ScreenSaverInhibit(false) event: {e}"
-                                    );
-                                }
-                        }
+                && let zbus::names::BusName::Unique(name) = args.name
+            {
+                let mut inhibitors = inhibitors.lock().await;
+                if !inhibitors.is_empty() {
+                    inhibitors.retain(|inhibitor| inhibitor.client != name);
+                    if inhibitors.is_empty()
+                        && let Err(e) = event_sender.send(Event::ScreenSaverInhibit(false))
+                    {
+                        log::error!("Failed to send ScreenSaverInhibit(false) event: {e}");
                     }
+                }
+            }
         }
     });
 

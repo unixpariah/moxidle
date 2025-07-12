@@ -4,6 +4,7 @@ mod config;
 mod login;
 mod screensaver;
 mod upower;
+mod usb;
 
 use calloop::EventLoop;
 use calloop_wayland_source::WaylandSource;
@@ -15,7 +16,7 @@ use log::LevelFilter;
 use rusb::UsbContext;
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
-use std::{error::Error, ops::Deref, path::PathBuf, sync::Arc, time::Instant};
+use std::{ops::Deref, path::PathBuf, sync::Arc, time::Instant};
 use tokio::sync::oneshot;
 use upower::{BatteryLevel, BatteryState, LevelComparison, Power, PowerSource};
 use wayland_client::{
@@ -26,8 +27,6 @@ use wayland_client::{
 use wayland_protocols::ext::idle_notify::v1::client::{
     ext_idle_notification_v1, ext_idle_notifier_v1,
 };
-
-type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
 struct TimeoutHandler {
     config: ListenerConfig,
@@ -116,6 +115,7 @@ struct Moxidle {
     inhibitors: Inhibitors,
     qh: QueueHandle<Self>,
     power: Power,
+    usb_context: Option<rusb::Context>,
 }
 
 impl Deref for Moxidle {
@@ -132,7 +132,8 @@ impl Moxidle {
         qh: QueueHandle<Self>,
         config_path: Option<PathBuf>,
         emit_sender: mpsc::Sender<()>,
-    ) -> Result<Self> {
+        usb_context: Option<rusb::Context>,
+    ) -> anyhow::Result<Self> {
         let notifier = globals
             .bind(&qh, 1..=1, ())
             .expect("Compositor doesn't support ext-idle-notifier-v1");
@@ -148,6 +149,7 @@ impl Moxidle {
             .collect();
 
         Ok(Self {
+            usb_context,
             state: State::new(emit_sender),
             power: Power::default(),
             listeners,
@@ -201,7 +203,7 @@ impl Moxidle {
                 self.power.update_percentage(battery);
                 self.reset_idle_timers();
             }
-            Event::SimulateUserActivity => {
+            Event::SimulateUserActivity | Event::Usb => {
                 self.reset_idle_timers();
             }
             Event::ScreenSaverInhibit(inhibited) => {
@@ -301,20 +303,26 @@ impl Moxidle {
                         Condition::BatteryLevel(level) => self.power.level() == level,
                         Condition::BatteryState(state) => self.power.state() == state,
                         Condition::UsbPlugged(id) => {
-                            let context = rusb::Context::new().unwrap();
-                            context.devices().unwrap().iter().any(|device| {
-                                let desc = device.device_descriptor().unwrap();
-                                format!("{:04x}:{:04x}", desc.vendor_id(), desc.product_id())
-                                    == **id
-                            })
+                            self.usb_context
+                                .as_ref()
+                                .and_then(|ctx| ctx.devices().ok())
+                                .is_some_and(|devices| {
+                                    devices.iter().any(|device| {
+                                        let desc = device.device_descriptor().unwrap();
+                                        format!("{:04x}:{:04x}", desc.vendor_id(), desc.product_id()) == **id
+                                    })
+                                })
                         }
                         Condition::UsbUnplugged(id) => {
-                            let context = rusb::Context::new().unwrap();
-                            context.devices().unwrap().iter().any(|device| {
-                                let desc = device.device_descriptor().unwrap();
-                                format!("{:04x}:{:04x}", desc.vendor_id(), desc.product_id())
-                                    != **id
-                            })
+                            self.usb_context
+                                .as_ref()
+                                .and_then(|ctx| ctx.devices().ok())
+                                .is_some_and(|devices| {
+                                    devices.iter().all(|device| {
+                                        let desc = device.device_descriptor().unwrap();
+                                        format!("{:04x}:{:04x}", desc.vendor_id(), desc.product_id()) != **id
+                                    })
+                                })
                         }
                     })
             } else {
@@ -330,7 +338,7 @@ impl Moxidle {
                         (),
                     ));
 
-                    log::debug!(
+                    log::info!(
                         "Notification created\ntimeout: {}\nconditions: {:?}\non_timeout: {:?}\non_resume: {:?}",
                         handler.config.timeout,
                         handler.config.conditions,
@@ -340,7 +348,7 @@ impl Moxidle {
                 }
             } else if let Some(notification) = handler.notification.take() {
                 notification.destroy();
-                log::debug!(
+                log::info!(
                     "Notification destroyed\ntimeout: {}\nconditions: {:?}\non_timeout: {:?}\non_resume: {:?}",
                     handler.config.timeout,
                     handler.config.conditions,
@@ -365,6 +373,7 @@ enum Event {
     ScreenSaverLock,
     BlockInhibited(bool),
     PrepareForSleep(bool),
+    Usb,
     #[cfg(feature = "audio")]
     AudioInhibit(bool),
 }
@@ -469,7 +478,7 @@ struct Cli {
 }
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     let mut log_level = LevelFilter::Info;
@@ -502,7 +511,8 @@ async fn main() -> Result<()> {
 
     let mut event_loop = EventLoop::try_new()?;
     let (emit_sender, emit_receiver) = mpsc::channel();
-    let mut moxidle = Moxidle::new(globals, qh, cli.config, emit_sender)?;
+    let usb_context = rusb::Context::new();
+    let mut moxidle = Moxidle::new(globals, qh, cli.config, emit_sender, usb_context.ok())?;
 
     WaylandSource::new(conn, event_queue).insert(event_loop.handle())?;
 
@@ -577,9 +587,29 @@ async fn main() -> Result<()> {
         })?;
     }
 
+    if let Some(usb_context) = moxidle.usb_context.as_ref() {
+        let event_sender = event_sender.clone();
+        usb::serve(event_sender, usb_context.clone())?;
+
+        let usb_context = usb_context.clone();
+        event_loop
+            .handle()
+            .insert_source(calloop::timer::Timer::immediate(), move |_, _, _| {
+                if let Err(e) = usb_context.handle_events(None) {
+                    log::error!("USB event handling error: {e}");
+                }
+
+                calloop::timer::TimeoutAction::ToInstant(
+                    std::time::Instant::now() + std::time::Duration::from_millis(100),
+                )
+            })
+            .map_err(|e| anyhow::anyhow!("Failed to insert USB event source: {e}"))?;
+    }
+
     event_loop
         .handle()
-        .insert_source(executor, |_: (), _, _| ())?;
+        .insert_source(executor, |_: (), _, _| ())
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
 
     event_loop
         .handle()
@@ -587,7 +617,8 @@ async fn main() -> Result<()> {
             if let calloop::channel::Event::Msg(event) = event {
                 state.handle_app_event(event);
             }
-        })?;
+        })
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
 
     event_loop.run(None, &mut moxidle, |_| {})?;
     Ok(())
