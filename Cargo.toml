@@ -10,22 +10,22 @@ codegen-units = 1
 panic = "abort"
 
 [dependencies]
-calloop = { version = "0.14.2", features = [ "executor" ] }
+calloop = { version = "0.14.2", features = ["executor"] }
 calloop-wayland-source = "0.4.0"
-env_logger = "0.11.6"
+env_logger = { version = "0.11.6", default-features = false }
 log = "0.4.25"
-mlua = { version = "0.10.3", features = [ "lua54", "serialize" ] }
-serde = { version = "1.0.217", features = [ "rc", "derive" ] }
+mlua = { version = "0.10.3", features = ["lua54", "serialize"] }
+serde = { version = "1.0.217", features = ["rc"], default-features = false }
 wayland-client = "0.31.7"
-wayland-protocols = { version = "0.32.5", features = [ "staging", "client" ] }
-futures-lite = "2.6.0"
-zbus = "5.3.1"
-libpulse-binding = { version = "2.28.2", optional = true }
-tokio = { version = "1.45.0", features = ["process", "macros", "rt-multi-thread", "sync"] }
+wayland-protocols = { version = "0.32.5", features = ["client", "staging"] }
+futures-lite = { version = "2.6.0", default-features = false }
+zbus = { version = "5.3.1", features = ["async-io"], default-features = false }
+libpulse-binding = { version = "2.28.2", optional = true , default-features = false }
+tokio = { version = "1.45.0", features = ["macros", "rt-multi-thread", "sync"] }
 clap = { version = "4.5.27", features = ["derive"] }
 serde_repr = "0.1.19"
 rusb = "0.9.4"
-anyhow = "1.0.98"
+anyhow = { version = "1.0.98", default-features = false }
 
 [features]
 default = [ "audio" ]

@@ -41,7 +41,7 @@ pub async fn serve(
     event_sender: channel::Sender<Event>,
     ignore_systemd_inhibit: bool,
 ) -> zbus::Result<()> {
-    let login_manager = LoginManagerProxy::new(&connection).await?;
+    let login_manager = Arc::new(LoginManagerProxy::new(&connection).await?);
     let session_path = login_manager.get_session("auto").await?;
 
     let login_session = match LoginSessionProxy::builder(&connection)
@@ -49,42 +49,33 @@ pub async fn serve(
         .build()
         .await
     {
-        Ok(session) => session,
+        Ok(session) => Arc::new(session),
         Err(e) => {
             log::error!("Couldn't create session proxy: {e}");
             return Ok(());
         }
     };
 
-    let (mut block_inhibited_stream, mut lock_stream, mut unlock_stream, mut sleep_stream) = tokio::try_join!(
-        async { Ok(login_manager.receive_block_inhibited_changed().await) },
-        login_session.receive_lock(),
-        login_session.receive_unlock(),
-        login_manager.receive_prepare_for_sleep()
-    )?;
-
     if !ignore_systemd_inhibit {
-        if let Ok(block_inhibited) = login_manager.block_inhibited().await {
-            handle_block_inhibited(&block_inhibited, &event_sender).await;
-        }
-
-        {
-            let event_sender = event_sender.clone();
-            tokio::spawn(async move {
-                while let Some(change) = block_inhibited_stream.next().await {
-                    if change.name() == "BlockInhibited"
-                        && let Ok(block_inhibited) = change.get().await
-                    {
-                        handle_block_inhibited(&block_inhibited, &event_sender).await;
-                    }
+        let event_sender = event_sender.clone();
+        let login_manager = Arc::clone(&login_manager);
+        tokio::spawn(async move {
+            let mut block_inhibited_stream = login_manager.receive_block_inhibited_changed().await;
+            while let Some(change) = block_inhibited_stream.next().await {
+                if change.name() == "BlockInhibited"
+                    && let Ok(block_inhibited) = change.get().await
+                {
+                    handle_block_inhibited(&block_inhibited, &event_sender).await;
                 }
-            });
-        }
+            }
+        });
     }
 
     {
         let event_sender = event_sender.clone();
+        let login_session = Arc::clone(&login_session);
         tokio::spawn(async move {
+            let mut lock_stream = login_session.receive_lock().await.unwrap();
             while lock_stream.next().await.is_some() {
                 if let Err(e) = event_sender.send(Event::SessionLocked(true)) {
                     log::error!("Failed to send SessionLocked event: {e}")
@@ -96,6 +87,7 @@ pub async fn serve(
     {
         let event_sender = event_sender.clone();
         tokio::spawn(async move {
+            let mut unlock_stream = login_session.receive_unlock().await.unwrap();
             while unlock_stream.next().await.is_some() {
                 if let Err(e) = event_sender.send(Event::SessionLocked(false)) {
                     log::error!("Failed to send SessionLocked event: {e}")
@@ -107,6 +99,7 @@ pub async fn serve(
     {
         let event_sender = event_sender.clone();
         tokio::spawn(async move {
+            let mut sleep_stream = login_manager.receive_prepare_for_sleep().await.unwrap();
             while let Some(sleep) = sleep_stream.next().await {
                 if let Ok(sleep) = sleep.args() {
                     let start = *sleep.start();

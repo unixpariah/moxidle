@@ -219,57 +219,67 @@ pub async fn serve(
         return Ok(());
     }
 
-    let device = upower.get_display_device().await?;
-    if !ignore_battery_percentage {
-        let percentage = device.percentage().await?;
-        handle_battery_percentage(&event_sender, percentage);
-
-        let mut percentage_stream = device.receive_percentage_changed().await;
-        log::info!("BatteryPercentage listener active");
-
-        let event_sender = event_sender.clone();
-        tokio::spawn(async move {
-            while let Some(event) = percentage_stream.next().await {
-                if let Ok(percentage) = event.get().await {
-                    handle_battery_percentage(&event_sender, percentage);
-                }
+    let upower_clone = upower.clone();
+    let event_sender_clone = event_sender.clone();
+    tokio::spawn(async move {
+        let device = match upower_clone.get_display_device().await {
+            Ok(device) => device,
+            Err(e) => {
+                log::error!("Failed to get display device: {e}");
+                return;
             }
-        });
-    }
+        };
 
-    if !ignore_battery_state {
-        let state = device.state().await?;
-        handle_state(&event_sender, state);
+        if !ignore_battery_percentage {
+            let mut percentage_stream = device.receive_percentage_changed().await;
+            log::info!("BatteryPercentage listener active");
 
-        let mut state_stream = device.receive_state_changed().await;
-        log::info!("BatteryState listener active");
-
-        let event_sender = event_sender.clone();
-        tokio::spawn(async move {
-            while let Some(event) = state_stream.next().await {
-                if let Ok(state) = event.get().await {
-                    handle_state(&event_sender, state);
+            let event_sender = event_sender_clone.clone();
+            tokio::spawn(async move {
+                while let Some(event) = percentage_stream.next().await {
+                    if let Ok(percentage) = event.get().await {
+                        handle_battery_percentage(&event_sender, percentage);
+                    }
                 }
+            });
+        }
+
+        if !ignore_battery_state {
+            if let Ok(state) = device.state().await {
+                handle_state(&event_sender_clone, state);
             }
-        });
-    }
 
-    if !ignore_battery_level {
-        let level = device.battery_level().await?;
-        handle_battery_level(&event_sender, level);
+            let mut state_stream = device.receive_state_changed().await;
+            log::info!("BatteryState listener active");
 
-        let mut level_stream = device.receive_battery_level_changed().await;
-        log::info!("BatteryLevel listener active");
-
-        let event_sender = event_sender.clone();
-        tokio::spawn(async move {
-            while let Some(event) = level_stream.next().await {
-                if let Ok(level) = event.get().await {
-                    handle_battery_level(&event_sender, level);
+            let event_sender = event_sender_clone.clone();
+            tokio::spawn(async move {
+                while let Some(event) = state_stream.next().await {
+                    if let Ok(state) = event.get().await {
+                        handle_state(&event_sender, state);
+                    }
                 }
+            });
+        }
+
+        if !ignore_battery_level {
+            if let Ok(level) = device.battery_level().await {
+                handle_battery_level(&event_sender_clone, level);
             }
-        });
-    }
+
+            let mut level_stream = device.receive_battery_level_changed().await;
+            log::info!("BatteryLevel listener active");
+
+            let event_sender = event_sender_clone.clone();
+            tokio::spawn(async move {
+                while let Some(event) = level_stream.next().await {
+                    if let Ok(level) = event.get().await {
+                        handle_battery_level(&event_sender, level);
+                    }
+                }
+            });
+        }
+    });
 
     Ok(())
 }

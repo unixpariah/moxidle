@@ -211,6 +211,7 @@ impl Moxidle {
                 self.reset_idle_timers();
             }
             Event::BlockInhibited(inhibited) => {
+                log::info!("{inhibited}");
                 if inhibited != self.inhibitors.systemd_inhibitor {
                     let action = if inhibited { "Added" } else { "Removed" };
                     log::info!("{action} dbus inhibitor");
